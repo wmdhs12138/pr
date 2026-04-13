@@ -27,6 +27,7 @@
 #include <signal.h>     /* siginfo_t, */
 #include <sys/uio.h>    /* struct iovec, */
 #include <sys/param.h>  /* MIN(), MAX(), */
+#include <sys/wait.h>   /* __WALL, */
 #include <string.h>     /* memcpy(3), */
 
 #include "ptrace/ptrace.h"
@@ -58,7 +59,13 @@
 #define user_fpregs_struct user_fpsimd_struct
 #endif
 
-static const char *stringify_ptrace(PTRACE_REQUEST_TYPE request)
+static const char *stringify_ptrace(
+#ifdef __GLIBC__
+		enum __ptrace_request
+#else
+		int
+#endif
+		request)
 {
 #define CASE_STR(a) case a: return #a; break;
 	switch ((int) request) {
@@ -258,13 +265,6 @@ int translate_ptrace_exit(Tracee *tracee)
 		break;  /* Restart the ptracee.  */
 
 	case PTRACE_SETOPTIONS:
-		if (data & PTRACE_O_TRACESECCOMP) {
-			/* We don't really support forwarding seccomp traps */
-			note(ptracer, WARNING, INTERNAL,
-			     "ptrace option PTRACE_O_TRACESECCOMP "
-			     "not supported yet");
-			return -EINVAL;
-		}
 		PTRACEE.options = data;
 		return 0;  /* Don't restart the ptracee.  */
 

@@ -35,6 +35,7 @@
 
 #include "tracee/tracee.h"
 #include "tracee/reg.h"
+#include "tracee/mem.h"
 #include "path/binding.h"
 #include "syscall/sysnum.h"
 #include "tracee/event.h"
@@ -45,11 +46,6 @@
 
 #include "compat.h"
 
-#ifndef __W_STOPCODE
-#define __W_STOPCODE(sig)	((sig) <<8 | 0x7f)
-#endif
-
-typedef LIST_HEAD(tracees, tracee) Tracees;
 static Tracees tracees;
 
 
@@ -243,7 +239,7 @@ static Tracee *new_tracee(pid_t pid)
  * wait(2) manual for the meaning of @wait_options.  This function
  * returns NULL if there's no such ptracee.
  */
-Tracee *get_ptracee(const Tracee *ptracer, pid_t pid, bool only_stopped,
+static Tracee *get_ptracee(const Tracee *ptracer, pid_t pid, bool only_stopped,
 			bool only_with_pevent, word_t wait_options)
 {
 	Tracee *ptracee;
@@ -349,15 +345,15 @@ Tracee *get_tracee(const Tracee *current_tracee, pid_t pid, bool create)
  */
 void terminate_tracee(Tracee *tracee)
 {
-        tracee->terminated = true;
+	tracee->terminated = true;
 
-        /* Case where the terminated tracee is marked
-           to kill all tracees on exit.
-        */
-        if (tracee->killall_on_exit) {
-                VERBOSE(tracee, 1, "terminating all tracees on exit");
-                kill_all_tracees();
-        }
+	/* Case where the terminated tracee is marked
+	   to kill all tracees on exit.
+	*/
+	if (tracee->killall_on_exit) {
+		VERBOSE(tracee, 1, "terminating all tracees on exit");
+		kill_all_tracees();
+	}
 }
 
 /**
@@ -436,7 +432,12 @@ int new_child(Tracee *parent, word_t clone_flags)
 	child->verbose = parent->verbose;
 	child->seccomp = parent->seccomp;
 	child->sysexit_pending = parent->sysexit_pending;
-	child->restart_how = parent->restart_how;
+#ifdef HAS_POKEDATA_WORKAROUND
+	child->pokedata_workaround_stub_addr = parent->pokedata_workaround_stub_addr;
+#endif
+#ifdef ARCH_ARM64
+	child->is_aarch32 = parent->is_aarch32;
+#endif
 
 	/* If CLONE_VM is set, the calling process and the child
 	 * process run in the same memory space [...] any memory
@@ -458,6 +459,8 @@ int new_child(Tracee *parent, word_t clone_flags)
 		: talloc_memdup(child, parent->heap, sizeof(Heap));
 	if (child->heap == NULL)
 		return -ENOMEM;
+
+	child->load_info = talloc_reference(child, parent->load_info);
 
 	/* If CLONE_PARENT is set, then the parent of the new child
 	 * (as returned by getppid(2)) will be the same as that of the
@@ -568,6 +571,9 @@ int new_child(Tracee *parent, word_t clone_flags)
 			/* Sanity check.  */
 			assert(!child->as_ptracee.tracing_started);
 
+#ifndef __W_STOPCODE
+	#define __W_STOPCODE(sig) ((sig) << 8 | 0x7f)
+#endif
 			keep_stopped = handle_ptracee_event(child, __W_STOPCODE(SIGSTOP));
 
 			/* Note that this event was already handled by
@@ -632,4 +638,8 @@ void kill_all_tracees()
 
 	LIST_FOREACH(tracee, &tracees, link)
 		kill(tracee->pid, SIGKILL);
+}
+
+Tracees *get_tracees_list_head() {
+	return &tracees;
 }

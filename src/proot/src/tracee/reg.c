@@ -116,6 +116,7 @@
 
     #undef  USER_REGS_OFFSET
     #define USER_REGS_OFFSET(reg_name) offsetof(struct user_regs_struct, reg_name)
+    #define USER_REGS_OFFSET_32(reg_number) ((reg_number) * 4)
 
     static off_t reg_offset[] = {
 	[SYSARG_NUM]    = USER_REGS_OFFSET(regs[8]),
@@ -130,6 +131,26 @@
 	[INSTR_POINTER] = USER_REGS_OFFSET(pc),
 	[USERARG_1]     = USER_REGS_OFFSET(regs[0]),
     };
+
+    static off_t reg_offset_armeabi[] = {
+	[SYSARG_NUM]    = USER_REGS_OFFSET_32(7),
+	[SYSARG_1]      = USER_REGS_OFFSET_32(0),
+	[SYSARG_2]      = USER_REGS_OFFSET_32(1),
+	[SYSARG_3]      = USER_REGS_OFFSET_32(2),
+	[SYSARG_4]      = USER_REGS_OFFSET_32(3),
+	[SYSARG_5]      = USER_REGS_OFFSET_32(4),
+	[SYSARG_6]      = USER_REGS_OFFSET_32(5),
+	[SYSARG_RESULT] = USER_REGS_OFFSET_32(0),
+	[STACK_POINTER] = USER_REGS_OFFSET_32(13),
+	[INSTR_POINTER] = USER_REGS_OFFSET_32(15),
+	[USERARG_1]     = USER_REGS_OFFSET_32(0),
+    };
+
+    #undef  REG
+    #define REG(tracee, version, index)					\
+	(*(word_t*) (tracee->is_aarch32									\
+		? (((uint8_t *) &tracee->_regs[version]) + reg_offset_armeabi[index]) \
+		: (((uint8_t *) &tracee->_regs[version]) + reg_offset[index])))
 
 #elif defined(ARCH_X86)
 
@@ -198,6 +219,11 @@ void poke_reg(Tracee *tracee, Reg reg, word_t value)
 	if (peek_reg(tracee, CURRENT, reg) == value)
 		return;
 
+#ifdef ARCH_ARM64
+	if (is_32on64_mode(tracee)) {
+		*(uint32_t *) &REG(tracee, CURRENT, reg) = value;
+	} else
+#endif
 	REG(tracee, CURRENT, reg) = value;
 	tracee->_regs_were_changed = true;
 }
@@ -262,20 +288,21 @@ int fetch_regs(Tracee *tracee)
 	return 0;
 }
 
-/**
- * Copy the cached values of all @tracee's general purpose registers
- * back to the process, if necessary.  This function returns -errno if
- * an error occured, 0 otherwise.
- */
-int push_regs(Tracee *tracee)
+int push_specific_regs(Tracee *tracee, bool including_sysnum)
 {
 	int status;
 
-	if (tracee->_regs_were_changed) {
+	if (tracee->_regs_were_changed
+			|| (tracee->restore_original_regs && tracee->restore_original_regs_after_seccomp_event)) {
 		/* At the very end of a syscall, with regard to the
 		 * entry, only the result register can be modified by
 		 * PRoot.  */
 		if (tracee->restore_original_regs) {
+			RegVersion restore_from = ORIGINAL;
+			if (tracee->restore_original_regs_after_seccomp_event) {
+				restore_from = ORIGINAL_SECCOMP_REWRITE;
+				tracee->restore_original_regs_after_seccomp_event = false;
+			}
 			/* Restore the sysarg register only if it is
 			 * not the same as the result register.  Note:
 			 * it's never the case on x86 architectures,
@@ -283,10 +310,10 @@ int push_regs(Tracee *tracee)
 			 * would introduce useless complexity because
 			 * of the multiple ABI support.  */
 #if defined(ARCH_X86) || defined(ARCH_X86_64)
-#    define		RESTORE(sysarg)	(REG(tracee, CURRENT, sysarg) = REG(tracee, ORIGINAL, sysarg))
+#    define		RESTORE(sysarg)	(REG(tracee, CURRENT, sysarg) = REG(tracee, restore_from, sysarg))
 #else
 #    define	 	RESTORE(sysarg) (void) (reg_offset[SYSARG_RESULT] != reg_offset[sysarg] && \
-				(REG(tracee, CURRENT, sysarg) = REG(tracee, ORIGINAL, sysarg)))
+				(REG(tracee, CURRENT, sysarg) = REG(tracee, restore_from, sysarg)))
 #endif
 
 			RESTORE(SYSARG_NUM);
@@ -306,12 +333,14 @@ int push_regs(Tracee *tracee)
 		/* Update syscall number if needed.  On arm64, a new
 		 * subcommand has been added to PTRACE_{S,G}ETREGSET
 		 * to allow write/read of current sycall number.  */
-		if (current_sysnum != REG(tracee, ORIGINAL, SYSARG_NUM)) {
+		if (including_sysnum && current_sysnum != REG(tracee, ORIGINAL, SYSARG_NUM)) {
 			regs.iov_base = &current_sysnum;
 			regs.iov_len = sizeof(current_sysnum);
 			status = ptrace(PTRACE_SETREGSET, tracee->pid, NT_ARM_SYSTEM_CALL, &regs);
-			if (status < 0)
-				note(tracee, WARNING, SYSTEM, "can't set the syscall number");
+			if (status < 0) {
+				//note(tracee, WARNING, SYSTEM, "can't set the syscall number");
+				return status;
+			}
 		}
 
 		/* Update other registers.  */
@@ -325,10 +354,12 @@ int push_regs(Tracee *tracee)
 		 * change effectively the syscall number during a
 		 * ptrace-stop.  */
 		word_t current_sysnum = REG(tracee, CURRENT, SYSARG_NUM);
-		if (current_sysnum != REG(tracee, ORIGINAL, SYSARG_NUM)) {
+		if (including_sysnum && current_sysnum != REG(tracee, ORIGINAL, SYSARG_NUM)) {
 			status = ptrace(PTRACE_SET_SYSCALL, tracee->pid, 0, current_sysnum);
-			if (status < 0)
-				note(tracee, WARNING, SYSTEM, "can't set the syscall number");
+			if (status < 0) {
+				//note(tracee, WARNING, SYSTEM, "can't set the syscall number");
+				return status;
+			}
 		}
 #    endif
 
@@ -339,4 +370,30 @@ int push_regs(Tracee *tracee)
 	}
 
 	return 0;
+}
+
+/**
+ * Copy the cached values of all @tracee's general purpose registers
+ * back to the process, if necessary.  This function returns -errno if
+ * an error occured, 0 otherwise.
+ */
+int push_regs(Tracee *tracee) {
+	return push_specific_regs(tracee, true);
+}
+
+word_t get_systrap_size(Tracee *tracee) {
+#if defined(ARCH_ARM_EABI)
+	/* On ARM thumb mode systrap size is 2 */
+	if (tracee->_regs[CURRENT].ARM_cpsr & PSR_T_BIT) {
+		return 2;
+	}
+#elif defined(ARCH_ARM64)
+	/* Same for AArch32, but we don't have nice macros */
+	if (tracee->is_aarch32 && (((unsigned char *) &tracee->_regs[CURRENT])[0x40] & 0x20) != 0) {
+		return 2;
+	}
+#else
+	(void) tracee;
+#endif
+	return SYSTRAP_SIZE;
 }

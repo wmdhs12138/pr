@@ -99,8 +99,7 @@ int translate_wait_enter(Tracee *ptracer)
 	 * not a ptracee.  */
 	pid = (pid_t) peek_reg(ptracer, ORIGINAL, SYSARG_1);
 	if (pid != -1) {
-		ptracee = get_ptracee(ptracer, pid, false, true,
-				      peek_reg(ptracer, ORIGINAL, SYSARG_3));
+		ptracee = get_tracee(ptracer, pid, false);
 		if (ptracee == NULL || PTRACEE.ptracer != ptracer)
 			return 0;
 	}
@@ -179,14 +178,13 @@ static int update_wait_status(Tracee *ptracer, Tracee *ptracee)
  * of the ptrace mechanism. This function returns -errno if an error
  * occured, otherwise the pid of the expected tracee.
  */
-int translate_wait_exit(Tracee *ptracer, bool *set_result)
+int translate_wait_exit(Tracee *ptracer)
 {
 	Tracee *ptracee;
 	word_t options;
 	int status;
 	pid_t pid;
 
-	*set_result = true;
 	assert(PTRACER.waits_in == WAITS_IN_PROOT);
 	PTRACER.waits_in = DOESNT_WAIT;
 
@@ -222,10 +220,9 @@ int translate_wait_exit(Tracee *ptracer, bool *set_result)
 	}
 
 	status = update_wait_status(ptracer, ptracee);
-	// If the syscall is restarted, don't touch the result.
-	// Not only is it unnecessary, it could overwrite syscall argument on ARM.
-	if (status == 0)
-		*set_result = false;
+	if (status < 0)
+		return status;
+
 	return status;
 }
 
@@ -238,6 +235,7 @@ int translate_wait_exit(Tracee *ptracer, bool *set_result)
 bool handle_ptracee_event(Tracee *ptracee, int event)
 {
 	bool handled_by_proot_first = false;
+	bool handled_by_proot_first_may_suppress = false;
 	Tracee *ptracer = PTRACEE.ptracer;
 	bool keep_stopped;
 
@@ -290,6 +288,11 @@ bool handle_ptracee_event(Tracee *ptracee, int event)
 			 * ptrace emulation.  */
 			return false;
 
+		case SIGSYS:
+			handled_by_proot_first = true;
+			handled_by_proot_first_may_suppress = true;
+			break;
+
 		default:
 			PTRACEE.tracing_started = true;
 			break;
@@ -317,10 +320,37 @@ bool handle_ptracee_event(Tracee *ptracee, int event)
 		signal = handle_tracee_event(ptracee, PTRACEE.event4.proot.value);
 		PTRACEE.event4.proot.value = signal;
 
-		/* The computed signal is always 0 since we can come
-		 * in this block only on sysexit and special events
-		 * (as for now).  */
-		assert(signal == 0);
+		if (handled_by_proot_first_may_suppress) {
+			/* If we've decided to suppress signal
+			 * (e.g. because seccomp policy blocked syscall
+			 * but we emulate that syscall),
+			 * don't notify ptracer and let ptracee resume.  */
+			if (signal == 0) {
+				if (seccomp_event_happens_after_enter_sigtrap()) {
+					if (PTRACEE.ignore_syscalls)
+					{
+						restart_tracee(ptracee, 0);
+						return true;
+					}
+					/* However if we've already notified ptracer about syscall entry
+					 * before knowing it'll be blocked, notify ptracer about exit.  */
+					PTRACEE.event4.proot.value = 0;
+					if (PTRACEE.options & PTRACE_O_TRACESYSGOOD) {
+						event = (SIGTRAP | 0x80) << 8 | 0x7f;
+					} else {
+						event = SIGTRAP << 8 | 0x7f;
+					}
+				} else {
+					restart_tracee(ptracee, 0);
+					return true;
+				}
+			}
+		} else {
+			/* The computed signal is always 0 since we can come
+			 * in this block only on sysexit and special events
+			 * (as for now).  */
+			assert(signal == 0);
+		}
 	}
 
 	/* Remember what the new event is, this will be required by
@@ -342,7 +372,9 @@ bool handle_ptracee_event(Tracee *ptracee, int event)
 		int status;
 
 		status = update_wait_status(ptracer, ptracee);
-		if (status != 0)
+		if (status == 0)
+			chain_next_syscall(ptracer);
+		else
 			poke_reg(ptracer, SYSARG_RESULT, (word_t) status);
 
 		/* Write ptracer's register cache back.  */

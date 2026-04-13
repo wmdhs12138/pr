@@ -38,12 +38,14 @@
   - Loader uses .exe extension, --rosegment linker flag
   - Also copied vendor/termux-proot fake_id0 split files (18 .c + 17 .h)
 
-- [ ] **T1.4** Create build.sh for NDK cross-compilation (builds from src/proot/)
-  - NDK standalone toolchain setup (aarch64, API 28)
-  - libtalloc static cross-build
-  - proot static build with NDK tools
-  - Binary verification (file, readelf checks)
-  - Optional arm (armeabi-v7a) build
+- [x] **T1.4** Create build.sh for NDK cross-compilation (builds from src/proot/)
+  - Auto-downloads Android NDK r27c if not found (accepts NDK_PATH env var)
+  - Creates standalone toolchain per architecture (API 28)
+  - Clones and cross-compiles libtalloc as static library per arch
+  - Builds proot with NDK clang (statically linked, -ltalloc)
+  - Binary verification: file(1), readelf -h, check no NEEDED entries
+  - Builds both aarch64 and arm by default (--arch= flag for single arch)
+  - Output: build/out/arm64/proot, build/out/arm/proot
 
 - [ ] **T1.5** Test proot binary on Android device
   - Push binary via adb

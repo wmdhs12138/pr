@@ -31,6 +31,7 @@
 #include "tracee/tracee.h"
 #include "tracee/reg.h"
 #include "tracee/mem.h"
+#include "cli/note.h"
 
 /**
  * Copy in @path a C string (PATH_MAX bytes max.) from the @tracee's
@@ -68,7 +69,7 @@ int get_sysarg_path(const Tracee *tracee, char path[PATH_MAX], Reg reg)
  * syscall points to this new block.  This function returns -errno if
  * an error occured, otherwise 0.
  */
-static int set_sysarg_data(Tracee *tracee, const void *tracer_ptr, word_t size, Reg reg)
+int set_sysarg_data(Tracee *tracee, const void *tracer_ptr, word_t size, Reg reg)
 {
 	word_t tracee_ptr;
 	int status;
@@ -110,12 +111,26 @@ void translate_syscall(Tracee *tracee)
 	if (status < 0)
 		return;
 
+	int suppressed_syscall_status = 0;
+
 	if (is_enter_stage) {
 		/* Never restore original register values at the end
 		 * of this stage.  */
 		tracee->restore_original_regs = false;
 
 		print_current_regs(tracee, 3, "sysenter start");
+
+#ifdef HAS_POKEDATA_WORKAROUND
+		/* In case of pokedata workaround has cancelled real enter
+		 * of syscall we've enqueued start of syscall again
+		 * so we won't translate it here again.  */
+		if (tracee->pokedata_workaround_relaunched_syscall) {
+			tracee->pokedata_workaround_relaunched_syscall = false;
+			tracee->status = 1;
+			tracee->restart_how = PTRACE_SYSCALL;
+			return;
+		}
+#endif
 
 		/* Translate the syscall only if it was actually
 		 * requested by the tracee, it is not a syscall
@@ -126,7 +141,9 @@ void translate_syscall(Tracee *tracee)
 			save_current_regs(tracee, MODIFIED);
 		}
 		else {
-			status = notify_extensions(tracee, SYSCALL_CHAINED_ENTER, 0, 0);
+			if (tracee->chain.sysnum_workaround_state != SYSNUM_WORKAROUND_PROCESS_REPLACED_CALL) {
+				status = notify_extensions(tracee, SYSCALL_CHAINED_ENTER, 0, 0);
+			}
 			tracee->restart_how = PTRACE_SYSCALL;
 		}
 
@@ -137,14 +154,30 @@ void translate_syscall(Tracee *tracee)
 			set_sysnum(tracee, PR_void);
 			poke_reg(tracee, SYSARG_RESULT, (word_t) status);
 			tracee->status = status;
+#if defined(ARCH_ARM_EABI)
+			tracee->restart_how = PTRACE_SYSCALL;
+#endif
 		}
 		else
 			tracee->status = 1;
+
+#ifdef HAS_POKEDATA_WORKAROUND
+		if (tracee->pokedata_workaround_cancelled_syscall) {
+			tracee->pokedata_workaround_cancelled_syscall = false;
+			tracee->pokedata_workaround_relaunched_syscall = true;
+			tracee->restart_how = PTRACE_SYSCALL;
+			tracee->status = 0;
+			poke_reg(tracee, INSTR_POINTER, peek_reg(tracee, CURRENT, INSTR_POINTER) - SYSTRAP_SIZE);
+			push_specific_regs(tracee, false);
+			return;
+		}
+#endif
 
 		/* Restore tracee's stack pointer now if it won't hit
 		 * the sysexit stage (i.e. when seccomp is enabled and
 		 * there's nothing else to do).  */
 		if (tracee->restart_how == PTRACE_CONT) {
+			suppressed_syscall_status = tracee->status;
 			tracee->status = 0;
 			poke_reg(tracee, STACK_POINTER, peek_reg(tracee, ORIGINAL, STACK_POINTER));
 		}
@@ -154,25 +187,85 @@ void translate_syscall(Tracee *tracee)
 		 * end of this stage.  */
 		tracee->restore_original_regs = true;
 
+#ifdef HAS_POKEDATA_WORKAROUND
+		/* This is exit from syscall that was cancelled
+		 * by pokedata workaround - ignore.  */
+		if (tracee->pokedata_workaround_relaunched_syscall)
+		{
+			return;
+		}
+#endif
+
 		print_current_regs(tracee, 5, "sysexit start");
 
 		/* Translate the syscall only if it was actually
 		 * requested by the tracee, it is not a syscall
 		 * chained by PRoot.  */
-		if (tracee->chain.syscalls == NULL)
+		if (tracee->chain.syscalls == NULL || tracee->chain.sysnum_workaround_state == SYSNUM_WORKAROUND_PROCESS_REPLACED_CALL) {
+			tracee->chain.sysnum_workaround_state = SYSNUM_WORKAROUND_INACTIVE;
 			translate_syscall_exit(tracee);
+		}
+		else if (tracee->chain.sysnum_workaround_state == SYSNUM_WORKAROUND_PROCESS_FAULTY_CALL) {
+			tracee->chain.sysnum_workaround_state = SYSNUM_WORKAROUND_PROCESS_REPLACED_CALL;
+		}
 		else
 			(void) notify_extensions(tracee, SYSCALL_CHAINED_EXIT, 0, 0);
 
 		/* Reset the tracee's status. */
 		tracee->status = 0;
+#ifdef HAS_POKEDATA_WORKAROUND
+		tracee->pokedata_workaround_cancelled_syscall = false;
+#endif
 
 		/* Insert the next chained syscall, if any.  */
 		if (tracee->chain.syscalls != NULL)
 			chain_next_syscall(tracee);
 	}
 
-	(void) push_regs(tracee);
+	bool override_sysnum = is_enter_stage && tracee->chain.syscalls == NULL;
+	int push_regs_status = push_specific_regs(tracee, override_sysnum);
+
+	/* Handle inability to change syscall number */
+	if (push_regs_status < 0 && override_sysnum) {
+		word_t orig_sysnum = peek_reg(tracee, ORIGINAL, SYSARG_NUM);
+		word_t current_sysnum = peek_reg(tracee, CURRENT, SYSARG_NUM);
+		print_current_regs(tracee, 4, "pre_push");
+		if (orig_sysnum != current_sysnum) {
+			/* Restart current syscall as chained */
+			if (current_sysnum != SYSCALL_AVOIDER) {
+				restart_current_syscall_as_chained(tracee);
+			} else if (suppressed_syscall_status) {
+				/* If we've decided to fail this syscall
+				 * by setting it to no-op and continuing, but turns out
+				 * that we can't just make syscall nop, restore tracee->status
+				 * and intercept syscall exit */
+				tracee->status = suppressed_syscall_status;
+				tracee->restart_how = PTRACE_SYSCALL;
+			}
+
+			/* Set syscall arguments to make it fail
+			 * TODO: More reliable way to make invalid arguments
+			 * For most syscalls we set all args to -1
+			 * Hoping there is among them invalid request/address/fd/value that will make syscall fail */
+			poke_reg(tracee, SYSARG_1, -1);
+			poke_reg(tracee, SYSARG_2, -1);
+			poke_reg(tracee, SYSARG_3, -1);
+			poke_reg(tracee, SYSARG_4, -1);
+			poke_reg(tracee, SYSARG_5, -1);
+			poke_reg(tracee, SYSARG_6, -1);
+
+			if (get_sysnum(tracee, ORIGINAL) == PR_brk) {
+				/* For brk() we pass 0 as first arg; this is used to query value without changing it */
+				poke_reg(tracee, SYSARG_1, 0);
+			}
+
+			/* Push regs again without changing syscall */
+			push_regs_status = push_specific_regs(tracee, false);
+			if (push_regs_status != 0) {
+				note(tracee, WARNING, SYSTEM, "can't set tracee registers in workaround");
+			}
+		}
+	}
 
 	if (is_enter_stage)
 		print_current_regs(tracee, 5, "sysenter end" );

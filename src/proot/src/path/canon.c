@@ -35,6 +35,7 @@
 #include "path/binding.h"
 #include "path/glue.h"
 #include "path/proc.h"
+#include "path/f2fs-bug.h"
 #include "extension/extension.h"
 
 /**
@@ -129,7 +130,8 @@ static inline Finality next_component(char component[NAME_MAX], const char **cur
  * Resolve bindings (if any) in @guest_path and copy the translated
  * path into @host_path.  Also, this function checks that a non-final
  * component is either a directory (returned value is 0) or a symlink
- * (returned value is 1), otherwise it returns -errno or -ENOTDIR.
+ * (returned value is 1), otherwise it returns -errno (-ENOENT or
+ * -ENOTDIR).
  */
 static inline int substitute_binding_stat(Tracee *tracee, Finality finality, unsigned int recursion_level,
 					const char guest_path[PATH_MAX], char host_path[PATH_MAX])
@@ -151,7 +153,20 @@ static inline int substitute_binding_stat(Tracee *tracee, Finality finality, uns
 	}
 
 	statl.st_mode = 0;
-	status = lstat(host_path, &statl);
+	if (should_skip_file_access_due_to_f2fs_bug(tracee, host_path)) {
+		status = -ENOENT;
+	} else {
+		status = lstat(host_path, &statl);
+		/* /linkerconfig directory is present and accessible on Android,
+		 * but cannot be stat()'d, use hardcoded stat if access was denied
+		 *
+		 * https://github.com/termux/proot/issues/254
+		 */
+		if (status < 0 && errno == EACCES && strcmp(host_path, "/linkerconfig") == 0) {
+			status = 0;
+			statl.st_mode = S_IFDIR;
+		}
+	}
 
 	/* Build the glue between the hostfs and the guestfs during
 	 * the initialization of a binding.  */
@@ -161,12 +176,12 @@ static inline int substitute_binding_stat(Tracee *tracee, Finality finality, uns
 			status = -1;
 	}
 
-	/* Return an error if a non-final component isn't a directory
-	 * nor a symlink.  The error depends on why the component
-	 * could not be accessed (ENOENT, EACCES, ...), otherwise the
-	 * error is "Not a directory".  */
+	/* Return an error if a non-final component isn't a
+	 * directory nor a symlink.  The error is "No such
+	 * file or directory" if this component doesn't exist,
+	 * otherwise the error is "Not a directory".  */
 	if (!IS_FINAL(finality) && !S_ISDIR(statl.st_mode) && !S_ISLNK(statl.st_mode))
-		return (status < 0 ? -errno : -ENOTDIR);
+		return (status < 0 ? -ENOENT : -ENOTDIR);
 
 	return (S_ISLNK(statl.st_mode) ? 1 : 0);
 }
@@ -185,7 +200,6 @@ int canonicalize(Tracee *tracee, const char *user_path, bool deref_final,
 		 char guest_path[PATH_MAX], unsigned int recursion_level)
 {
 	char scratch_path[PATH_MAX];
-	char host_path[PATH_MAX];
 	Finality finality;
 	const char *cursor;
 	int status;
@@ -211,20 +225,13 @@ int canonicalize(Tracee *tracee, const char *user_path, bool deref_final,
 	else
 		strcpy(guest_path, "/");
 
-
-	/* Resolve bindings for the initial '/' component or user_path,
-	 * which is not handled in the loop below.
-	 * In particular HOST_PATH extensions are called from there.  */
-	status = substitute_binding_stat(tracee, NOT_FINAL, recursion_level, guest_path, host_path);
-	if (status < 0)
-		return status;
-
 	/* Canonicalize recursely 'user_path' into 'guest_path'.  */
 	cursor = user_path;
 	finality = NOT_FINAL;
 	while (!IS_FINAL(finality)) {
 		Comparison comparison;
 		char component[NAME_MAX];
+		char host_path[PATH_MAX];
 
 		finality = next_component(component, &cursor);
 		status = (int) finality;

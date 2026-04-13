@@ -223,9 +223,15 @@ static int transfer_load_script(Tracee *tracee)
 			: strlen(tracee->load_info->raw_path) + 1);
 
 	/* A padding will be appended at the end of the load script
-	 * (a.k.a "strings area") to ensure this latter is aligned properly. */
+	 * (a.k.a "strings area") to ensure this latter is aligned to
+	 * a word boundary, for the sake of performance
+	 * (or 16 bytes, since AArch64 needs SP 16-bytes-aligned). */
 	padding_size = (stack_pointer - string1_size - string2_size - string3_size)
-			% STACK_ALIGNMENT;
+#ifdef ARCH_ARM64
+		        % 16;
+#else
+			% sizeof_word(tracee);
+#endif
 
 	strings_size = string1_size + string2_size + string3_size + padding_size;
 	string1_address = stack_pointer - strings_size;
@@ -399,6 +405,11 @@ void translate_execve_exit(Tracee *tracee)
 	word_t syscall_result;
 	int status;
 
+	if (tracee->skip_proot_loader) {
+		tracee->restore_original_regs = false;
+		return;
+	}
+
 	if (IS_NOTIFICATION_PTRACED_LOAD_DONE(tracee)) {
 		/* Be sure not to confuse the ptracer with an
 		 * unexpected syscall/returned value.  */
@@ -417,6 +428,11 @@ void translate_execve_exit(Tracee *tracee)
 		poke_reg(tracee, INSTR_POINTER, peek_reg(tracee, ORIGINAL, SYSARG_3));
 		poke_reg(tracee, RTLD_FINI, 0);
 		poke_reg(tracee, STATE_FLAGS, 0);
+
+#if defined(ARCH_ARM_EABI) && defined(__thumb__)
+		/* Leave ARM thumb mode */
+		tracee->_regs[CURRENT].ARM_cpsr &= ~PSR_T_BIT;
+#endif
 
 		/* Restore registers to their current values.  */
 		save_current_regs(tracee, ORIGINAL);
@@ -447,6 +463,10 @@ void translate_execve_exit(Tracee *tracee)
 		return;
 	}
 
+#ifdef ARCH_ARM64
+	tracee->is_aarch32 = IS_CLASS32(tracee->load_info->elf_header);
+#endif
+
 	syscall_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 	if ((int) syscall_result < 0)
 		return;
@@ -458,19 +478,18 @@ void translate_execve_exit(Tracee *tracee)
 		talloc_set_name_const(tracee->exe, "$exe");
 	}
 
-	/* New processes have no heap. The process could've been cloned with
-	 * CLONE_VM so it has been sharing the heap with its parent. execve()
-	 * discards the VM so make sure to reallocate new heap. */
-	if (talloc_reference_count(tracee->heap) > 0) {
+	/* New processes have no heap.  */
+	if (talloc_reference_count(tracee->heap) >= 1) {
 		talloc_unlink(tracee, tracee->heap);
 		tracee->heap = talloc_zero(tracee, Heap);
-		if (!tracee->heap)
-			note(tracee, ERROR, INTERNAL, "can't allocate heap");
+		if (tracee->heap == NULL)
+			note(tracee, ERROR, INTERNAL, "can't alloc heap after execve");
 	} else {
 		bzero(tracee->heap, sizeof(Heap));
 	}
 
 	/* Transfer the load script to the loader.  */
+	mem_prepare_after_execve(tracee);
 	status = transfer_load_script(tracee);
 	if (status < 0)
 		note(tracee, ERROR, INTERNAL, "can't transfer load script: %s", strerror(-status));

@@ -30,22 +30,22 @@
 #include <sys/types.h>     /* getpid(2),  */
 #include <unistd.h>        /* getpid(2),  */
 #include <errno.h>         /* errno(3), */
-#include <limits.h>        /* INT_MAX, */
-
-/* execinfo.h is GNU extension, disable it not using glibc */
-#if defined(__GLIBC__)
+#include <libgen.h>        /* basename(3), */
+#ifdef __GLIBC__
 #include <execinfo.h>      /* backtrace_symbols(3), */
 #endif
+#include <limits.h>        /* INT_MAX, */
 
 #include "cli/cli.h"
 #include "cli/note.h"
-#include "extension/care/extract.h"
 #include "extension/extension.h"
 #include "tracee/tracee.h"
 #include "tracee/event.h"
 #include "path/binding.h"
 #include "path/canon.h"
 #include "path/path.h"
+#include <extension/extension.h>
+#include <extension/sysvipc/sysvipc.h>
 
 #include "build.h"
 
@@ -127,6 +127,14 @@ void print_version(const Cli *cli)
 static void print_execve_help(const Tracee *tracee, const char *argv0, int status)
 {
 	note(tracee, ERROR, SYSTEM, "execve(\"%s\")", argv0);
+
+	/* termux-exec replaced execve with path with one that doesn't exist inside proot?  */
+	if (status == -ENOENT && getenv("LD_PRELOAD") != NULL && strstr(getenv("LD_PRELOAD"), "libtermux-exec.so") != NULL) {
+		note(tracee, INFO, USER,
+"It seems that termux-exec is active and is prepending /data/data/com.termux/... to executable paths\n"
+"If this is path is not available inside proot, please \"unset LD_PRELOAD\"");
+		return;
+	}
 
 	/* Ubuntu kernel bug?  */
 	if (status == -EPERM && getenv("PROOT_NO_SECCOMP") == NULL) {
@@ -298,20 +306,6 @@ static int parse_config(Tracee *tracee, size_t argc, char *const argv[])
 	size_t i, j, k;
 	int status;
 
-	if (get_care_cli != NULL) {
-		/* Check if it's an self-extracting CARE archive.  */
-		status = extract_archive_from_file("/proc/self/exe");
-		if (status == 0) {
-			/* Yes it is, nothing more to do.  */
-			exit_failure = 0;
-			return -1;
-		}
-
-		/* Check if it's a valid CARE tool name.  */
-		if (strncasecmp(basename(argv[0]), "care", strlen("care")) == 0)
-			cli = get_care_cli(tracee->ctx);
-	}
-
 	/* Unknown tool name?  Default to PRoot.  */
 	if (cli == NULL)
 		cli = get_proot_cli(tracee->ctx);
@@ -463,16 +457,32 @@ int main(int argc, char *const argv[])
 	talloc_set_log_stderr();
 #endif
 
+	if (argc == 2 && strcmp(argv[1], "--shm-helper") == 0) {
+		sysvipc_shm_helper_main();
+	}
+
 	/* Pre-create the first tracee (pid == 0).  */
 	tracee = get_tracee(NULL, 0, true);
 	if (tracee == NULL)
 		goto error;
 	tracee->pid = getpid();
 
+	/* Set verboseness from env variable, may be overriden by option */
+	{
+		const char *verbose_env = getenv("PROOT_VERBOSE");
+		if (verbose_env != NULL) {
+			tracee->verbose = strtol(verbose_env, NULL, 10);
+			global_verbose_level = tracee->verbose;
+		}
+	}
+
 	/* Pre-configure the first tracee.  */
 	status = parse_config(tracee, argc, argv);
 	if (status < 0)
 		goto error;
+
+	if (NULL == getenv("PROOT_NO_MOUNTINFO"))
+		initialize_extension(tracee, mountinfo_callback, NULL);
 
 	/* Start the first tracee.  */
 	status = launch_process(tracee, &argv[status]);
@@ -554,9 +564,6 @@ const char *expand_front_variable(TALLOC_CTX *context, const char *string)
  * with CFLAGS='-finstrument-functions -O0 -g' and LDFLAGS='-rdynamic'
  * to enable this mechanism.  */
 
-/* since we rely on GLIBC extensions, disable all of this code if
- * __GLIBC__ is not defined */
-#if defined(__GLIBC__)
 static int indent_level = 0;
 
 void __cyg_profile_func_enter(void *this_function, void *call_site) DONT_INSTRUMENT;
@@ -565,7 +572,9 @@ void __cyg_profile_func_enter(void *this_function, void *call_site)
 	void *const pointers[] = { this_function, call_site };
 	char **symbols = NULL;
 
+#ifdef __GLIBC__
 	symbols = backtrace_symbols(pointers, 2);
+#endif
 	if (symbols == NULL)
 		goto end;
 
@@ -585,4 +594,3 @@ void __cyg_profile_func_exit(void *this_function UNUSED, void *call_site UNUSED)
 	if (indent_level > 0)
 		indent_level--;
 }
-#endif

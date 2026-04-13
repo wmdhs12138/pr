@@ -23,8 +23,10 @@
 #include <errno.h>       /* errno(3), E* */
 #include <sys/utsname.h> /* struct utsname, */
 #include <linux/net.h>   /* SYS_*, */
+#include <linux/ioctl.h> /* _IOW, */
 #include <string.h>      /* strlen(3), */
 
+#include "cli/note.h"
 #include "syscall/syscall.h"
 #include "syscall/sysnum.h"
 #include "syscall/socket.h"
@@ -36,6 +38,8 @@
 #include "tracee/reg.h"
 #include "tracee/mem.h"
 #include "tracee/abi.h"
+#include "tracee/seccomp.h"
+#include "tracee/statx.h"
 #include "path/path.h"
 #include "ptrace/ptrace.h"
 #include "ptrace/wait.h"
@@ -67,6 +71,19 @@ void translate_syscall_exit(Tracee *tracee)
 	if (tracee->status < 0) {
 		poke_reg(tracee, SYSARG_RESULT, (word_t) tracee->status);
 		goto end;
+	}
+
+	/* If proot changed syscall to PR_void during enter,
+	 * keep syscall result set during entry. */
+	if (peek_reg(tracee, MODIFIED, SYSARG_NUM) ==
+#if defined(ARCH_ARM64) || defined(ARCH_X86_64)
+			(is_32on64_mode(tracee) ? (SYSCALL_AVOIDER & 0xFFFFFFFF) : SYSCALL_AVOIDER)
+#else
+			SYSCALL_AVOIDER
+#endif
+			&&
+			peek_reg(tracee, ORIGINAL, SYSARG_NUM) != peek_reg(tracee, MODIFIED, SYSARG_NUM)) {
+		poke_reg(tracee, SYSARG_RESULT, peek_reg(tracee, MODIFIED, SYSARG_RESULT));
 	}
 
 	/* Translate output arguments:
@@ -232,8 +249,7 @@ void translate_syscall_exit(Tracee *tracee)
 		break;
 
 	case PR_rename:
-	case PR_renameat:
-	case PR_renameat2: {
+	case PR_renameat: {
 		char old_path[PATH_MAX];
 		char new_path[PATH_MAX];
 		ssize_t old_length;
@@ -361,6 +377,19 @@ void translate_syscall_exit(Tracee *tracee)
 			break;
 		}
 
+		if (status == 1) {
+			/* Empty path was passed (""),
+			 * indicating that path is pointed to by fd passed in first argument */
+			word_t dirfd = peek_reg(tracee, ORIGINAL, SYSARG_1);
+			if (syscall_number == PR_readlink || dirfd < 0) {
+				status = -EBADF;
+				break;
+			}
+			status = readlink_proc_pid_fd(tracee->pid, dirfd, referer);
+			if (status < 0)
+				break;
+		}
+
 		status = detranslate_path(tracee, referee, referer);
 		if (status < 0)
 			break;
@@ -428,6 +457,7 @@ void translate_syscall_exit(Tracee *tracee)
 #endif
 
 	case PR_execve:
+	case PR_execveat:
 		translate_execve_exit(tracee);
 		goto end;
 
@@ -436,16 +466,12 @@ void translate_syscall_exit(Tracee *tracee)
 		break;
 
 	case PR_wait4:
-	case PR_waitpid: {
-		bool set_result = true;
+	case PR_waitpid:
 		if (tracee->as_ptracer.waits_in != WAITS_IN_PROOT)
 			goto end;
 
-		status = translate_wait_exit(tracee, &set_result);
-		if (!set_result)
-			goto end;
+		status = translate_wait_exit(tracee);
 		break;
-	}
 
 	case PR_setrlimit:
 	case PR_prlimit64:
@@ -458,6 +484,71 @@ void translate_syscall_exit(Tracee *tracee)
 			break;
 
 		/* Don't overwrite the syscall result.  */
+		goto end;
+	
+	case PR_utime:
+		if ((int) syscall_result == -ENOSYS)
+		{
+			fix_and_restart_enosys_syscall(tracee);
+		}
+		goto end;
+
+	case PR_statfs:
+	case PR_statfs64: {
+		/* Possibly fake that /dev/shm is living on tmpfs */
+		char devshm_path[PATH_MAX];
+		char statfs_path[PATH_MAX];
+
+		/* Only perform changes to result of successful syscall
+		 * (that is, path was valid, it doesn't have to point
+		 * to mount root) */
+		if (syscall_result != 0) {
+			goto end;
+		}
+
+		if (translate_path(tracee, devshm_path, AT_FDCWD, "/dev/shm", true) < 0) {
+			VERBOSE(tracee, 5, "/dev/shm is not mounted, not changing statfs() result");
+			goto end;
+		}
+
+		if (read_path(tracee, statfs_path, peek_reg(tracee, MODIFIED, SYSARG_1)) < 0) {
+			VERBOSE(tracee, 5, "statfs() exit couldn't read statfs_path");
+			goto end;
+		}
+
+		Comparison comparison = compare_paths(devshm_path, statfs_path);
+		if (comparison == PATHS_ARE_EQUAL || comparison == PATH1_IS_PREFIX) {
+			VERBOSE(tracee, 5, "Updating statfs() result to fake tmpfs /dev/shm");
+			/* Write TMPFS_MAGIC at beginning of statfs structure.
+			 *
+			 * (It's at beginning of structure regardless of syscall variant
+			 * (statfs vs statfs64) and architecture bitness
+			 * (on 64 bit this field is 8 bytes long, but as long as it's
+			 * little endian, it will need only first 4 bytes to be modified,
+			 * as next 4 bytes will always be 0))
+			 * */
+			word_t stat_addr = peek_reg(tracee, ORIGINAL, syscall_number == PR_statfs64 ? SYSARG_3 : SYSARG_2);
+			int write_status = write_data(tracee, stat_addr, "\x94\x19\x02\x01", 4);
+			if (write_status < 0) {
+				VERBOSE(tracee, 5, "Updating statfs() result failed");
+			}
+		}
+		else {
+			VERBOSE(tracee, 5, "statfs() not for /dev/shm, not changing result");
+		}
+
+		goto end;
+	}
+
+	case PR_statx:
+		status = handle_statx_syscall(tracee, false);
+		break;
+
+	case PR_ioctl:
+		if (peek_reg(tracee, ORIGINAL, SYSARG_2) == _IOW(0x94, 9, int) /* FICLONE */ &&
+				(int) peek_reg(tracee, CURRENT, SYSARG_RESULT) == -EACCES) {
+			poke_reg(tracee, SYSARG_RESULT, -EOPNOTSUPP);
+		}
 		goto end;
 
 	default:

@@ -382,10 +382,14 @@ static int expand_runner(Tracee* tracee, char host_path[PATH_MAX], char user_pat
 
 	/* No need to adjust argv[] if it's a host binary (a.k.a
 	 * mixed-mode).  */
-	if (tracee->mixed_mode || !is_host_elf(tracee, host_path)) {
+	if (!is_host_elf(tracee, host_path)) {
 		ArrayOfXPointers *argv;
 		size_t nb_qemu_args;
 		size_t i;
+
+		if (getenv("PROOT_USE_LOADER_FOR_QEMU") == NULL) {
+			tracee->skip_proot_loader = true;
+		}
 
 		status = fetch_array_of_xpointers(tracee, &argv, SYSARG_2, 0);
 		if (status < 0)
@@ -441,8 +445,12 @@ static int expand_runner(Tracee* tracee, char host_path[PATH_MAX], char user_pat
 
 		strcpy(host_path, tracee->qemu[0]);
 
-		strcpy(user_path, HOST_ROOTFS);
-		strcat(user_path, host_path);
+		if (tracee->skip_proot_loader) {
+			strcpy(user_path, host_path);
+		} else {
+			strcpy(user_path, HOST_ROOTFS);
+			strcat(user_path, host_path);
+		}
 	}
 
 	/* Provide information to the host dynamic linker to find host
@@ -459,11 +467,12 @@ static int expand_runner(Tracee* tracee, char host_path[PATH_MAX], char user_pat
 	return 0;
 }
 
-extern unsigned char _binary_loader_elf_start[];
-extern unsigned char _binary_loader_elf_end[];
+#if !defined(PROOT_UNBUNDLE_LOADER)
+extern unsigned char _binary_loader_exe_start;
+extern unsigned char _binary_loader_exe_end;
 
-extern unsigned char WEAK _binary_loader_m32_elf_start[];
-extern unsigned char WEAK _binary_loader_m32_elf_end[];
+extern unsigned char WEAK _binary_loader_m32_exe_start;
+extern unsigned char WEAK _binary_loader_m32_exe_end;
 
 /**
  * Extract the built-in loader.  This function returns NULL if an
@@ -488,12 +497,12 @@ static char *extract_loader(const Tracee *tracee, bool wants_32bit_version)
 	fd = fileno(file);
 
 	if (wants_32bit_version) {
-		start = (void *) _binary_loader_m32_elf_start;
-		size  = (size_t)(_binary_loader_m32_elf_end-_binary_loader_m32_elf_start);
+		start = (void *) &_binary_loader_m32_exe_start;
+		size  = (size_t) (&_binary_loader_m32_exe_end - &_binary_loader_m32_exe_start);
 	}
 	else {
-		start = (void *) _binary_loader_elf_start;
-		size  = (size_t) (_binary_loader_elf_end-_binary_loader_elf_start);
+		start = (void *) &_binary_loader_exe_start;
+		size  = (size_t) (&_binary_loader_exe_end - &_binary_loader_exe_start);
 	}
 
 	status2 = write(fd, start, size);
@@ -502,7 +511,7 @@ static char *extract_loader(const Tracee *tracee, bool wants_32bit_version)
 		goto end;
 	}
 
-	status = fchmod(fd, S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH);
+	status = fchmod(fd, S_IRUSR|S_IXUSR);
 	if (status < 0) {
 		note(tracee, ERROR, SYSTEM, "can't change loader permissions (u+rx)");
 		goto end;
@@ -544,6 +553,7 @@ end:
 
 	return loader_path;
 }
+#endif
 
 /**
  * Get the path to the loader for the given @tracee.  This function
@@ -551,6 +561,14 @@ end:
  */
 static inline const char *get_loader_path(const Tracee *tracee)
 {
+#if defined(PROOT_UNBUNDLE_LOADER)
+#if defined(HAS_LOADER_32BIT)
+	if (IS_CLASS32(tracee->load_info->elf_header)) {
+		return getenv("PROOT_LOADER_32") ?: PROOT_UNBUNDLE_LOADER "/loader32";
+	}
+#endif
+	return getenv("PROOT_LOADER") ?: PROOT_UNBUNDLE_LOADER "/loader";
+#else
 	static char *loader_path = NULL;
 
 #if defined(HAS_LOADER_32BIT)
@@ -566,6 +584,7 @@ static inline const char *get_loader_path(const Tracee *tracee)
 		loader_path = loader_path ?: getenv("PROOT_LOADER") ?: extract_loader(tracee, false);
 		return loader_path;
 	}
+#endif
 }
 
 /**
@@ -617,6 +636,9 @@ int translate_execve_enter(Tracee *tracee)
 	/* Remember the new value for "/proc/self/exe".  It points to
 	 * a canonicalized guest path, hence detranslate_path()
 	 * instead of using user_path directly.  */
+	talloc_unlink(tracee, tracee->host_exe);
+	tracee->host_exe = talloc_strdup(tracee, host_path);
+
 	strcpy(new_exe, host_path);
 	status = detranslate_path(tracee, new_exe, NULL);
 	if (status >= 0) {
@@ -626,13 +648,25 @@ int translate_execve_enter(Tracee *tracee)
 	else
 		tracee->new_exe = NULL;
 
+	tracee->skip_proot_loader = false;
 	if (tracee->qemu != NULL) {
 		status = expand_runner(tracee, host_path, user_path);
 		if (status < 0)
 			return status;
 	}
 
-	TALLOC_FREE(tracee->load_info);
+	talloc_unlink(tracee, tracee->load_info);
+
+	if (tracee->skip_proot_loader) {
+		tracee->load_info = NULL;
+		tracee->heap->disabled = true;
+
+		status = set_sysarg_path(tracee, host_path, SYSARG_1);
+		if (status < 0)
+			return status;
+
+		return 0;
+	}
 
 	tracee->load_info = talloc_zero(tracee, LoadInfo);
 	if (tracee->load_info == NULL)
@@ -663,8 +697,10 @@ int translate_execve_enter(Tracee *tracee)
 
 		/* An ELF interpreter is supposed to be
 		 * standalone.  */
-		if (tracee->load_info->interp->interp != NULL)
-			return -EINVAL;
+		if (tracee->load_info->interp->interp != NULL) {
+			TALLOC_FREE(tracee->load_info->interp->interp);
+			// TODO: Print warning?
+		}
 	}
 
 	compute_load_addresses(tracee);

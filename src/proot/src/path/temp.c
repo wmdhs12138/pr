@@ -25,16 +25,12 @@ const char *get_temp_directory()
 	temp_directory = getenv("PROOT_TMP_DIR");
 	if (temp_directory == NULL) {
 		temp_directory = P_tmpdir;
-		return temp_directory;
 	}
 
 	tmp = realpath(temp_directory, NULL);
 	if (tmp == NULL) {
 		note(NULL, WARNING, SYSTEM,
-			"can't canonicalize %s, using %s instead of PROOT_TMP_DIR",
-			temp_directory, P_tmpdir);
-
-		temp_directory = P_tmpdir;
+			"can't canonicalize %s", temp_directory);
 		return temp_directory;
 	}
 
@@ -45,28 +41,6 @@ const char *get_temp_directory()
 		free(tmp);
 
 	return temp_directory;
-}
-
-/**
- * Handle the return of d_type = DT_UNKNOWN by readdir(3)
- * Not all filesystems support returning d_type in readdir(3)
- */
-static int get_dtype(struct dirent *de)
-{
-	int dtype = de ? de->d_type : DT_UNKNOWN;
-	struct stat st;
-
-	if (dtype != DT_UNKNOWN)
-		return dtype;
-	if (lstat(de->d_name, &st))
-		return dtype;
-	if (S_ISREG(st.st_mode))
-		return DT_REG;
-	if (S_ISDIR(st.st_mode))
-		return DT_DIR;
-	if (S_ISLNK(st.st_mode))
-		return DT_LNK;
-	return dtype;
 }
 
 /**
@@ -108,7 +82,7 @@ static int clean_temp_cwd()
 	if (strncmp(prefix, temp_directory, length_temp_directory) != 0) {
 		note(NULL, ERROR, INTERNAL,
 			"trying to remove a directory outside of '%s', "
-			"please report this error.\n", temp_directory);
+			"please report this error.", temp_directory);
 		nb_errors++;
 		goto end;
 	}
@@ -139,7 +113,7 @@ static int clean_temp_cwd()
 			continue;
 		}
 
-		if (get_dtype(entry) == DT_DIR) {
+		if (entry->d_type == DT_DIR) {
 			status = chdir(entry->d_name);
 			if (status < 0) {
 				note(NULL, WARNING, SYSTEM, "can't chdir '%s'", entry->d_name);
