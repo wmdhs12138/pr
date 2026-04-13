@@ -78,11 +78,19 @@
   - @TERMUX_PREFIX@, @TERMUX_HOME@, @TERMUX_APP_PACKAGE@ still present in file;
     will be replaced in T2.2
 
-- [ ] **T2.2** Replace all template variables
-  - `@TERMUX_PREFIX@` → `${APP_PREFIX}`
-  - `@TERMUX_HOME@` → `${APP_HOME}`
-  - `@TERMUX_APP_PACKAGE@` → `${APP_PACKAGE}`
-  - Ensure APP_PREFIX, APP_HOME, APP_PACKAGE are set from environment
+- [x] **T2.2** Replace all template variables
+  - `@TERMUX_PREFIX@` → `${APP_PREFIX}` (21 occurrences)
+  - `@TERMUX_HOME@` → `${APP_HOME}` (5 occurrences)
+  - `@TERMUX_APP_PACKAGE@` → `${APP_PACKAGE}` (4 occurrences)
+  - Added runtime variable definitions at top of script with defaults:
+    - `APP_PREFIX="${APP_PREFIX:-/data/data/id.or.oo.pr/files/usr}"`
+    - `APP_HOME="${APP_HOME:-/data/data/id.or.oo.pr/files/home}"`
+    - `APP_PACKAGE="${APP_PACKAGE:-id.or.oo.pr}"`
+  - Removed `TERMUX_LDPRELOAD` save (no longer needed without Termux)
+  - Updated comments referencing Termux prefix to say "App prefix"
+  - Verified: `grep -c '@TERMUX_' src/scripts/proot-distro.sh` = 0
+  - Verified: `bash -n src/scripts/proot-distro.sh` passes with no errors
+  - Verified: plugins have zero @TERMUX_*@ references
 
 - [ ] **T2.3** Remove all Termux-specific code
   - Remove DISTRO_TYPE="termux" code paths in command_install

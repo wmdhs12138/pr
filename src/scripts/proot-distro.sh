@@ -34,20 +34,22 @@ PROGRAM_VERSION="4.38.0"
 
 set -e -u
 
-# Keep LD_PRELOAD value for restoring after unset.
-TERMUX_LDPRELOAD="${LD_PRELOAD-}"
+# Installation paths - set via environment or defaults.
+# The APK BootstrapService sets these before launching this script.
+APP_PREFIX="${APP_PREFIX:-/data/data/id.or.oo.pr/files/usr}"
+APP_HOME="${APP_HOME:-/data/data/id.or.oo.pr/files/home}"
+APP_PACKAGE="${APP_PACKAGE:-id.or.oo.pr}"
 
-# Override user-defined PATH.
-export PATH="@TERMUX_PREFIX@/bin"
+export PATH="${APP_PREFIX}/bin"
 
 # Reference this where need to retrieve program name.
 PROGRAM_NAME=$(basename "$(realpath "$0")")
 
 # Where distribution plug-ins are stored.
-DISTRO_PLUGINS_DIR="@TERMUX_PREFIX@/etc/proot-distro"
+DISTRO_PLUGINS_DIR="${APP_PREFIX}/etc/proot-distro"
 
 # Base directory where script keeps runtime data.
-RUNTIME_DIR="@TERMUX_PREFIX@/var/lib/proot-distro"
+RUNTIME_DIR="${APP_PREFIX}/var/lib/proot-distro"
 
 # Where rootfs archives are downloaded.
 DOWNLOAD_CACHE_DIR="${RUNTIME_DIR}/dlcache"
@@ -60,7 +62,7 @@ DEFAULT_PRIMARY_NAMESERVER="8.8.8.8"
 DEFAULT_SECONDARY_NAMESERVER="8.8.4.4"
 
 # PATH environment variable for distributions.
-DEFAULT_PATH_ENV="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:@TERMUX_PREFIX@/bin:/system/bin:/system/xbin"
+DEFAULT_PATH_ENV="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:${APP_PREFIX}/bin:/system/bin:/system/xbin"
 
 # Default fake kernel version.
 # Note: faking kernel version is required when using PRoot-Distro on
@@ -688,23 +690,23 @@ run_proot_cmd() {
 		# If CPU and host OS are 64bit, we can run 32bit guest OS without emulation.
 		# Everything else requires emulator (QEMU).
 		case "$DISTRO_ARCH" in
-			aarch64) cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-aarch64";;
+			aarch64) cpu_emulator_path="${APP_PREFIX}/bin/qemu-aarch64";;
 			arm)
 				if [ "$DEVICE_CPU_ARCH" != "aarch64" ] || ! $SUPPORT_32BIT; then
-					cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-arm"
+					cpu_emulator_path="${APP_PREFIX}/bin/qemu-arm"
 				fi
 				;;
 			i686)
 				if [ "$DEVICE_CPU_ARCH" != "x86_64" ]; then
-					cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-i386"
+					cpu_emulator_path="${APP_PREFIX}/bin/qemu-i386"
 				fi
 				;;
-			riscv64) cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-riscv64";;
+			riscv64) cpu_emulator_path="${APP_PREFIX}/bin/qemu-riscv64";;
 			x86_64)
 				if [ "$PROOT_DISTRO_X64_EMULATOR" = "QEMU" ]; then
-					cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-x86_64"
+					cpu_emulator_path="${APP_PREFIX}/bin/qemu-x86_64"
 				elif [ "$PROOT_DISTRO_X64_EMULATOR" = "BLINK" ]; then
-					cpu_emulator_path="@TERMUX_PREFIX@/bin/blink"
+					cpu_emulator_path="${APP_PREFIX}/bin/blink"
 				else
 					msg
 					msg "${BRED}Error: PROOT_DISTRO_X64_EMULATOR has unknown value '$PROOT_DISTRO_X64_EMULATOR'. Valid values are: BLINK, QEMU."
@@ -762,7 +764,7 @@ run_proot_cmd() {
 		if [ -e "/linkerconfig/ld.config.txt" ]; then
 			cpu_emulator_arg="${cpu_emulator_arg} --bind=/linkerconfig/ld.config.txt"
 		fi
-		cpu_emulator_arg="${cpu_emulator_arg} --bind=@TERMUX_PREFIX@"
+		cpu_emulator_arg="${cpu_emulator_arg} --bind=${APP_PREFIX}"
 		cpu_emulator_arg="${cpu_emulator_arg} --bind=/system"
 		cpu_emulator_arg="${cpu_emulator_arg} --bind=/vendor"
 		if [ -f "/plat_property_contexts" ]; then
@@ -1909,27 +1911,27 @@ command_login() {
 		# If CPU and host OS are 64bit, we can run 32bit guest OS without emulation.
 		# Everything else requires emulator (QEMU).
 		case "$target_arch" in
-			aarch64) cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-aarch64";;
+			aarch64) cpu_emulator_path="${APP_PREFIX}/bin/qemu-aarch64";;
 			arm)
 				if [ "$DEVICE_CPU_ARCH" != "aarch64" ] || ! $SUPPORT_32BIT; then
-					cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-arm"
+					cpu_emulator_path="${APP_PREFIX}/bin/qemu-arm"
 				else
 					need_cpu_emulator=false
 				fi
 				;;
 			i686)
 				if [ "$DEVICE_CPU_ARCH" != "x86_64" ]; then
-					cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-i386"
+					cpu_emulator_path="${APP_PREFIX}/bin/qemu-i386"
 				else
 					need_cpu_emulator=false
 				fi
 				;;
-			riscv64) cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-riscv64";;
+			riscv64) cpu_emulator_path="${APP_PREFIX}/bin/qemu-riscv64";;
 			x86_64)
 				if [ "$PROOT_DISTRO_X64_EMULATOR" = "QEMU" ]; then
-					cpu_emulator_path="@TERMUX_PREFIX@/bin/qemu-x86_64"
+					cpu_emulator_path="${APP_PREFIX}/bin/qemu-x86_64"
 				elif [ "$PROOT_DISTRO_X64_EMULATOR" = "BLINK" ]; then
-					cpu_emulator_path="@TERMUX_PREFIX@/bin/blink"
+					cpu_emulator_path="${APP_PREFIX}/bin/blink"
 				else
 					msg
 					msg "${BRED}Error: PROOT_DISTRO_X64_EMULATOR has unknown value '${YELLOW}${PROOT_DISTRO_X64_EMULATOR}${BRED}'. Valid values are: BLINK, QEMU."
@@ -2075,14 +2077,14 @@ command_login() {
 		done
 		unset data_dir
 
-		if [ -d "/data/data/@TERMUX_APP_PACKAGE@/files/apps" ]; then
-			set -- "--bind=/data/data/@TERMUX_APP_PACKAGE@/files/apps" "$@"
+		if [ -d "/data/data/${APP_PACKAGE}/files/apps" ]; then
+			set -- "--bind=/data/data/${APP_PACKAGE}/files/apps" "$@"
 		fi
 
 		# These bindings not available by default when running Termux distro.
 		if [ "${dist_type-normal}" != "termux" ]; then
-			set -- "--bind=/data/data/@TERMUX_APP_PACKAGE@/cache" "$@"
-			set -- "--bind=@TERMUX_HOME@" "$@"
+			set -- "--bind=/data/data/${APP_PACKAGE}/cache" "$@"
+			set -- "--bind=${APP_HOME}" "$@"
 		else
 			# For package manager in 'termux' distribution.
 			mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/cache"
@@ -2150,20 +2152,20 @@ command_login() {
 			fi
 		done
 
-		# Termux prefix can be bound only for non-Termux distributions.
+		# App prefix can be bound only for non-Termux distributions.
 		if [ "${dist_type-normal}" != "termux" ]; then
-			set -- "--bind=@TERMUX_PREFIX@" "$@"
+			set -- "--bind=${APP_PREFIX}" "$@"
 		fi
 	fi
 
-	# Use Termux home directory if requested.
+	# Use app home directory if requested.
 	# Ignores --isolated.
 	if $use_termux_home; then
 		if [ "${dist_type-normal}" = "termux" ]; then
-			set -- "--bind=@TERMUX_HOME@:/data/data/com.termux/files/home" "$@"
+			set -- "--bind=${APP_HOME}:${APP_HOME}" "$@"
 		else
 			if [ "$login_user" = "root" ]; then
-				set -- "--bind=@TERMUX_HOME@:/root" "$@"
+				set -- "--bind=${APP_HOME}:/root" "$@"
 			else
 				if [ -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" ]; then
 					local user_home
@@ -2173,9 +2175,9 @@ command_login() {
 						user_home="/home/${login_user}"
 					fi
 
-					set -- "--bind=@TERMUX_HOME@:${user_home}" "$@"
+					set -- "--bind=${APP_HOME}:${user_home}" "$@"
 				else
-					set -- "--bind=@TERMUX_HOME@:/home/${login_user}" "$@"
+					set -- "--bind=${APP_HOME}:/home/${login_user}" "$@"
 				fi
 			fi
 		fi
@@ -2184,7 +2186,7 @@ command_login() {
 	# Bind the tmp folder from the host system to the guest system
 	# Ignores --isolated.
 	if $make_host_tmp_shared; then
-		set -- "--bind=@TERMUX_PREFIX@/tmp:/tmp" "$@"
+		set -- "--bind=${APP_PREFIX}/tmp:/tmp" "$@"
 	fi
 
 	# Bind custom file systems.
@@ -2269,7 +2271,7 @@ command_login_help() {
 	msg
 	msg "  ${CYAN}* ${YELLOW}/apex ${CYAN}(only Android 10+)${RST}"
 	msg "  ${CYAN}* ${YELLOW}/data/dalvik-cache${RST}"
-	msg "  ${CYAN}* ${YELLOW}/data/data/@TERMUX_APP_PACKAGE@${RST}"
+	msg "  ${CYAN}* ${YELLOW}/data/data/${APP_PACKAGE}${RST}"
 	msg "  ${CYAN}* ${YELLOW}/sdcard${RST}"
 	msg "  ${CYAN}* ${YELLOW}/storage${RST}"
 	msg "  ${CYAN}* ${YELLOW}/system${RST}"
@@ -3096,8 +3098,8 @@ DISTRO_ARCH=${DISTRO_ARCH:-}
 if [ -z "$DISTRO_ARCH" ]; then DISTRO_ARCH="${DEVICE_CPU_ARCH}"; fi
 
 # Verify architecture if possible - avoid running under linux32 or similar.
-if [ -x "@TERMUX_PREFIX@/bin/dpkg" ]; then
-	if [ "$DEVICE_CPU_ARCH" != "$("@TERMUX_PREFIX@"/bin/dpkg --print-architecture)" ]; then
+if [ -x "${APP_PREFIX}/bin/dpkg" ]; then
+	if [ "$DEVICE_CPU_ARCH" != "$("${APP_PREFIX}"/bin/dpkg --print-architecture)" ]; then
 		msg
 		msg "${BRED}Error: the CPU architecture reported by system does not match the architecture of Termux packages. Do not attempt to hijack system properties by using 'linux32' or similar utilities.${RST}"
 		msg
