@@ -252,6 +252,52 @@ build_proot() {
     info "Built: ${out_dir}/proot ($(du -h "${out_dir}/proot" | cut -f1))"
 }
 
+fix_tls_alignment() {
+    local arch="$1"
+    local binary="${BUILD_DIR}/out/${arch}/proot"
+
+    local tls_align_hex
+    tls_align_hex=$(readelf -W -l "$binary" 2>/dev/null \
+        | awk '/^  TLS/{print $NF}' \
+        | sed 's/0x//')
+
+    if [ -z "$tls_align_hex" ]; then
+        info "No TLS segment found (skipping alignment fix)"
+        return
+    fi
+
+    local tls_align=$((16#$tls_align_hex))
+
+    if [ "$tls_align" -ge 64 ]; then
+        info "TLS alignment already ${tls_align}-byte (OK)"
+        return
+    fi
+
+    info "Fixing TLS alignment: ${tls_align} -> 64 (Android Bionic requirement)"
+
+    python3 -c "
+import struct, sys
+
+with open('${binary}', 'rb') as f:
+    data = bytearray(f.read())
+
+e_phoff = struct.unpack_from('<Q', data, 32)[0]
+e_phentsize = struct.unpack_from('<H', data, 54)[0]
+e_phnum = struct.unpack_from('<H', data, 56)[0]
+
+PT_TLS = 7
+for i in range(e_phnum):
+    off = e_phoff + i * e_phentsize
+    p_type = struct.unpack_from('<I', data, off)[0]
+    if p_type == PT_TLS:
+        struct.pack_into('<Q', data, off + 48, 64)
+        break
+
+with open('${binary}', 'wb') as f:
+    f.write(data)
+" || die "Failed to fix TLS alignment"
+}
+
 verify_binary() {
     local arch="$1"
     local out_dir="${BUILD_DIR}/out/${arch}"
@@ -268,6 +314,9 @@ verify_binary() {
 
     info "ELF header:"
     readelf -h "$binary" | grep -E "Class|Machine|Type"
+
+    info "TLS alignment:"
+    readelf -l "$binary" 2>/dev/null | awk '/^  TLS/{print $0}'
 
     info "Dynamic section (should be empty for static):"
     if readelf -d "$binary" 2>/dev/null | grep -q "NEEDED"; then
@@ -362,6 +411,7 @@ main() {
         fi
 
         build_proot "$arch"
+        fix_tls_alignment "$arch"
         verify_binary "$arch"
     done
 

@@ -83,7 +83,8 @@ OBJECTS += \
 	extension/sysvipc/sysvipc_sem.o \
 	extension/sysvipc/sysvipc_shm.o \
 	extension/link2symlink/link2symlink.o \
-	extension/fix_symlink_size/fix_symlink_size.o
+	extension/fix_symlink_size/fix_symlink_size.o \
+	tls-align.o
 
 define define_from_arch.h
 $2$1 := $(shell $(CC) $1 -E -dM -DNO_LIBC_HEADER $(SRC)/arch.h | grep -w $2 | cut -f 3 -d ' ')
