@@ -122,10 +122,16 @@
   - Removed .tmp rename pattern (download_file writes directly, cleans up on failure)
   - SHA-256 verification unchanged (sha256sum works in busybox)
 
-- [ ] **T2.5** Adapt dependency check
-  - Remove `unzip`, `lscpu`, `curl` from required list
-  - Add `bash` to required list (for proot-distro.sh itself)
-  - Verify utilities via busybox applet symlinks
+- [x] **T2.5** Adapt dependency check
+  - Removed `bzip2` (not used anywhere in script)
+  - Removed `curl` (already done in T2.3, now optional via download_file fallback)
+  - Added `realpath` (8 uses in command_login for path resolution)
+  - Added `stat` (9 uses for directory permission checks)
+  - Added `sha256sum` (used for rootfs integrity verification)
+  - Added `wget` (needed as download_file fallback when curl unavailable)
+  - Final list: awk, basename, cat, chmod, cp, cut, du, file, find, grep,
+    gzip, head, id, mkdir, proot, realpath, rm, sed, sha256sum, stat, tar,
+    wget, xargs (23 utilities, all busybox applets or our own binaries)
   - Add `proot` check against `${APP_PREFIX}/bin/proot`
 
 - [ ] **T2.6** Adapt CPU detection

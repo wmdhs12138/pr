@@ -126,8 +126,8 @@ msg() {
 #
 #############################################################################
 
-for i in awk basename bzip2 cat chmod cp cut du file find grep gzip \
-	head id mkdir proot rm sed tar xargs; do
+for i in awk basename cat chmod cp cut du file find grep gzip \
+	head id mkdir proot realpath rm sed sha256sum stat tar wget xargs; do
 	if [ -z "$(command -v "$i")" ]; then
 		msg
 		msg "${BRED}Utility '${i}' is not installed. Cannot continue.${RST}"
