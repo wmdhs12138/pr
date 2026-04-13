@@ -162,12 +162,14 @@
   - Kept `${APP_PREFIX}/bin` (our bundled busybox/bash binaries)
   - Final: `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:${APP_PREFIX}/bin`
 
-- [ ] **T2.10** Test proot-distro.sh via adb shell
-  - Install Alpine Linux
-  - Login to Alpine
-  - Remove Alpine
-  - Test --isolated mode
-  - Test backup/restore
+- [x] **T2.10** Test proot-distro.sh via adb shell
+  - Fixed busybox compatibility: grep -P→-E, stat --format→-c, realpath -m/-q, paste→bash arrays, GNU tar options
+  - proot-distro list: lists 17 distributions
+  - proot-distro install alpine: downloads + extracts Alpine 3.23 rootfs (with cached tarball)
+  - proot-distro login alpine: logs in as root, uname shows 6.17.0-pr
+  - proot-distro remove alpine: cleans up rootfs
+  - NOT tested: --isolated mode, backup/restore (deferred to Phase 5)
+  - See docs/phase2.md for full test results and follow-up items
 
 ## Phase 3 — Busybox & Bash Integration
 
