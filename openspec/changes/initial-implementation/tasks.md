@@ -153,12 +153,14 @@
   - Removed redundant mkdir in command_install (now handled upfront)
   - Exits with clear error messages if environment is broken
 
-- [ ] **T2.8** Update DEFAULT_FAKE_KERNEL_RELEASE
-  - Change to `6.17.0-pr`
+- [x] **T2.8** Update DEFAULT_FAKE_KERNEL_RELEASE
+  - Changed from `6.17.0-PRoot-Distro` to `6.17.0-pr`
+  - Matches proot binary version string (5.4.0-pr)
 
-- [ ] **T2.9** Update DEFAULT_PATH_ENV
-  - Remove @TERMUX_PREFIX@/bin and /system/bin references
-  - Use `${APP_PREFIX}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`
+- [x] **T2.9** Update DEFAULT_PATH_ENV
+  - Removed `/system/bin:/system/xbin` (Android system paths should not be in distro PATH)
+  - Kept `${APP_PREFIX}/bin` (our bundled busybox/bash binaries)
+  - Final: `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:${APP_PREFIX}/bin`
 
 - [ ] **T2.10** Test proot-distro.sh via adb shell
   - Install Alpine Linux

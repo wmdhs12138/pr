@@ -62,12 +62,12 @@ DEFAULT_PRIMARY_NAMESERVER="8.8.8.8"
 DEFAULT_SECONDARY_NAMESERVER="8.8.4.4"
 
 # PATH environment variable for distributions.
-DEFAULT_PATH_ENV="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:${APP_PREFIX}/bin:/system/bin:/system/xbin"
+DEFAULT_PATH_ENV="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:${APP_PREFIX}/bin"
 
 # Default fake kernel version.
 # Note: faking kernel version is required when using PRoot-Distro on
 # old devices that are not compatible with up-to-date versions of GNU libc.
-DEFAULT_FAKE_KERNEL_RELEASE="6.17.0-PRoot-Distro"
+DEFAULT_FAKE_KERNEL_RELEASE="6.17.0-pr"
 DEFAULT_FAKE_KERNEL_VERSION="#1 SMP PREEMPT_DYNAMIC Fri, 10 Oct 2025 00:00:00 +0000"
 
 # Emulator type for x86_64 systems.
