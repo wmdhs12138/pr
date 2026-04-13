@@ -7,3 +7,6 @@
 [submodule "vendor/termux-proot"]
 	path = vendor/termux-proot
 	url = git@github.com:termux/proot.git
+[submodule "vendor/samba"]
+	path = vendor/samba
+	url = git@github.com:samba-team/samba.git
