@@ -28,12 +28,15 @@
   - `src/syscall/seccomp.c` — Android-specific seccomp filter additions (ioctl, memfd_create, statx)
   - Note: 39 additional files also differ but deferred to build-time verification
 
-- [ ] **T1.3** Update src/proot/src/GNUmakefile
-  - Add all new .o targets
-  - Use `?=` for CC, STRIP, OBJCOPY, OBJDUMP
-  - Link libtalloc via `-ltalloc` directly
-  - Add ARM64 loader build rules
-  - Add loader-info.o for POKEDATA workaround
+- [x] **T1.3** Update src/proot/src/GNUmakefile
+  - Copied from vendor/termux-proot/src/GNUmakefile
+  - `?=` for CC, STRIP, OBJCOPY, OBJDUMP (cross-compilation support)
+  - Links libtalloc via `-ltalloc` directly (no pkg-config)
+  - 86 object files: new extensions, split fake_id0 (18 files), seccomp, statx, f2fs-bug
+  - HAS_POKEDATA_WORKAROUND detection + loader-info.o
+  - PROOT_UNBUNDLE_LOADER support
+  - Loader uses .exe extension, --rosegment linker flag
+  - Also copied vendor/termux-proot fake_id0 split files (18 .c + 17 .h)
 
 - [ ] **T1.4** Create build.sh for NDK cross-compilation (builds from src/proot/)
   - NDK standalone toolchain setup (aarch64, API 28)
