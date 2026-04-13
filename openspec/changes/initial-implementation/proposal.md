@@ -35,7 +35,7 @@ that bundles:
 
 ### In Scope
 
-- Cherry-pick P0–P3 patches from termux-proot into vendor/proot
+- Cherry-pick P0–P3 patches from termux-proot into src/proot/ (working copy of vendor/proot)
 - NDK build pipeline producing static proot for aarch64 (and arm)
 - Ported proot-distro.sh (all Termux references removed)
 - Static busybox integration (bundled, with applet symlinks)

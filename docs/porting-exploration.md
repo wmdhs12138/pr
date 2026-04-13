@@ -488,10 +488,10 @@ These are Android-generic (not Termux-specific) and should be preserved:
 
 ### 4.2 Integration Approach
 
-1. Start with `vendor/proot/` as the base.
-2. Copy over entire new files from `vendor/termux-proot/` (extensions, seccomp
+1. Copy `vendor/proot/` into `src/proot/` as a working copy (vendor submodules remain pristine references).
+2. Copy over entire new files from `vendor/termux-proot/` into `src/proot/` (extensions, seccomp
    handler, statx, f2fs-bug, ARM64 loader assembly).
-3. Merge modifications to existing files (`arch.h`, `tracee.h`, `mem.c`,
+3. Merge modifications to existing files in `src/proot/` (`arch.h`, `tracee.h`, `mem.c`,
    `event.c`, `GNUmakefile`, `proot.c`, `proot.h`).
 4. Update `GNUmakefile` to compile the new objects.
 5. Test build with Android NDK standalone toolchain.
@@ -516,18 +516,17 @@ optional `arm` support.
 
 ```
 id.or.oo.pr/
+├── src/
+│   ├── proot/                         # Working copy: vanilla proot + cherry-picked patches
+│   │   └── src/                       # Patched proot source (built with NDK)
+│   └── scripts/
+│       └── proot-distro.sh            # Standalone proot-distro script
 ├── app/src/main/
 │   ├── java/com/example/linuxonandroid/
 │   │   ├── MainActivity.java          # App entry point, UI
 │   │   ├── TerminalActivity.java      # Terminal emulator
 │   │   ├── DistroManager.java         # Install/remove/list distros
 │   │   └── ProotLauncher.java         # JNI bridge to launch proot
-│   ├── jni/
-│   │   ├── Android.mk                 # NDK build for proot
-│   │   ├── Application.mk             # ABI targets (arm64-v8a, armeabi-v7a)
-│   │   └── proot/                     # Vanilla proot + cherry-picked patches
-│   │       ├── src/                   # Patched proot source
-│   │       └── libtalloc/             # Static libtalloc for linking
 │   ├── assets/
 │   │   ├── bin/
 │   │   │   └── busybox-aarch64        # Static busybox binary
@@ -539,7 +538,10 @@ id.or.oo.pr/
 │   │       └── ...
 │   └── res/
 │       └── ...                        # Android resources
-│
+├── vendor/                            # Pristine git submodules (reference only)
+│   ├── proot/                         # Upstream vanilla proot
+│   ├── termux-proot/                  # Termux fork (Android patch source)
+│   └── termux-proot-distro/           # Termux distro manager (script source)
 ├── build.sh                           # Build script: NDK compile + asset packaging
 └── README.md
 ```
@@ -671,7 +673,7 @@ cd talloc
 make && make install
 
 # Build proot with cherry-picked patches
-cd vendor/proot/src
+cd src/proot/src
 make -f GNUmakefile \
     CC=/tmp/ndk-arm64/bin/aarch64-linux-android-gcc \
     STRIP=/tmp/ndk-arm64/bin/aarch64-linux-android-strip \

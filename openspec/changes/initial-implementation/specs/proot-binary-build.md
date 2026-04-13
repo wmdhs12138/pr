@@ -9,7 +9,7 @@ from vanilla proot source with cherry-picked Android patches from termux-proot.
 
 ### REQ-PROOT-001: Cherry-pick Android Patches
 
-Apply patches from `vendor/termux-proot/` into `vendor/proot/` in priority order:
+Apply patches from `vendor/termux-proot/` into `src/proot/` (working copy of `vendor/proot/`) in priority order:
 
 **P0 (blocking):**
 - SIGSYS/seccomp handler: `src/tracee/seccomp.c`, `src/tracee/seccomp.h`
@@ -36,7 +36,7 @@ Apply patches from `vendor/termux-proot/` into `vendor/proot/` in priority order
 
 ### REQ-PROOT-002: GNUmakefile Updates
 
-Update `vendor/proot/src/GNUmakefile` to:
+Update `src/proot/src/GNUmakefile` to:
 - Add all new object files from cherry-picked patches
 - Use `?=` (conditional assignment) for CC, STRIP, OBJCOPY, OBJDUMP
 - Support cross-compilation via `CROSS_COMPILE` or direct CC override

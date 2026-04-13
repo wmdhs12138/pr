@@ -2,20 +2,21 @@
 
 ## Phase 1 — Patched proot Binary
 
-- [ ] **T1.1** Copy new files from termux-proot into vendor/proot
+- [x] **T1.1** Copy new files from termux-proot into src/proot/ (working copy)
   - `src/tracee/seccomp.c`, `src/tracee/seccomp.h` (P0)
   - `src/tracee/statx.c`, `src/tracee/statx.h` (P1)
   - `src/path/f2fs-bug.c`, `src/path/f2fs-bug.h` (P2)
-  - `src/loader/assembly-arm64.h` (P0)
+  - `src/loader/assembly-arm64.h` (P0) — identical in both, skipped
   - `src/extension/ashmem_memfd/` (P1)
-  - `src/extension/link2symlink/` (P0)
+  - `src/extension/link2symlink/` (P0) — overwrote vanilla with termux version (387-line diff)
   - `src/extension/fix_symlink_size/` (P2)
   - `src/extension/sysvipc/` (P2)
   - `src/extension/hidden_files/` (P2)
   - `src/extension/mountinfo/` (P2)
   - `src/extension/port_switch/` (P2)
+  - `src/loader/loader-info.awk` (additional, new in termux-proot)
 
-- [ ] **T1.2** Merge modifications to existing proot source files
+- [ ] **T1.2** Merge modifications to existing proot source files (in src/proot/src/)
   - `src/arch.h` — ARM64 definitions, POKEDATA workaround, loader addresses
   - `src/tracee/tracee.h` — new struct fields (killall_on_exit, seccomp state, aarch32, chain)
   - `src/tracee/mem.c` — ARM64 POKEDATA workaround assembly stub
@@ -25,14 +26,14 @@
   - `src/extension/extension.h` — new events (SIGSYS_OCC, STATX_SYSCALL, LINK2SYMLINK_*)
   - `src/syscall/seccomp.c` — Android-specific seccomp filter additions
 
-- [ ] **T1.3** Update vendor/proot/src/GNUmakefile
+- [ ] **T1.3** Update src/proot/src/GNUmakefile
   - Add all new .o targets
   - Use `?=` for CC, STRIP, OBJCOPY, OBJDUMP
   - Link libtalloc via `-ltalloc` directly
   - Add ARM64 loader build rules
   - Add loader-info.o for POKEDATA workaround
 
-- [ ] **T1.4** Create build.sh for NDK cross-compilation
+- [ ] **T1.4** Create build.sh for NDK cross-compilation (builds from src/proot/)
   - NDK standalone toolchain setup (aarch64, API 28)
   - libtalloc static cross-build
   - proot static build with NDK tools

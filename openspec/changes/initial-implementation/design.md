@@ -47,7 +47,7 @@
 
 ### 1. Patched proot Binary
 
-**Source:** `vendor/proot/` with cherry-picked patches from `vendor/termux-proot/`.
+**Source:** `src/proot/` (working copy of `vendor/proot/` with cherry-picked patches from `vendor/termux-proot/`). Vendor submodules remain pristine references.
 
 **Patches applied (by priority):**
 
