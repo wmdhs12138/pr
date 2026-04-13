@@ -1,0 +1,15 @@
+*.o
+*.so
+*.a
+*.d
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+build/
+out/
+local/
+
+.opencode/node_modules/

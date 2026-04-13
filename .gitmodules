@@ -1,0 +1,9 @@
+[submodule "vendor/proot"]
+	path = vendor/proot
+	url = git@github.com:proot-me/proot.git
+[submodule "vendor/termux-proot-distro"]
+	path = vendor/termux-proot-distro
+	url = https://github.com/termux/proot-distro.git
+[submodule "vendor/termux-proot"]
+	path = vendor/termux-proot
+	url = git@github.com:termux/proot.git
