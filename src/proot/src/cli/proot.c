@@ -28,6 +28,7 @@
 #include "cli/cli.h"
 #include "cli/note.h"
 #include "extension/extension.h"
+#include "extension/sysvipc/sysvipc.h"
 #include "path/binding.h"
 #include "attribute.h"
 
@@ -140,12 +141,6 @@ static int handle_option_q(Tracee *tracee, const Cli *cli UNUSED, const char *va
 	new_binding(tracee, "/", HOST_ROOTFS, true);
 	new_binding(tracee, "/dev/null", "/etc/ld.so.preload", false);
 
-	return 0;
-}
-
-static int handle_option_mixed_mode(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
-{
-	tracee->mixed_mode = value;
 	return 0;
 }
 
@@ -286,59 +281,58 @@ static int handle_option_S(Tracee *tracee, const Cli *cli, const char *value)
 	return 0;
 }
 
-static int handle_option_p(Tracee *tracee, const Cli *cli UNUSED, const char *value)
+static int handle_option_link2symlink(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
 {
-	int status = 0;
-	char *port_in;
-	char *port_out;
+	int status;
 
-	port_in = talloc_strdup(tracee->ctx, value);
-	if (port_in == NULL) {
-		note(tracee, ERROR, INTERNAL, "can't allocate memory");
-		return -1;
-	}
+	/* Initialize the link2symlink extension.  */
+	status = initialize_extension(tracee, link2symlink_callback, NULL);
+	if (status < 0)
+		note(tracee, WARNING, INTERNAL, "link2symlink not initialized");
 
-	port_out = strchr(port_in, ':');
-	if (port_out != NULL) {
-		*port_out = '\0';
-		port_out++;
-	}
-
-	if(global_portmap_extension == NULL)
-		status = initialize_extension(tracee, portmap_callback, value);
-	if(status < 0)
-		return status;
-
-	status = add_portmap_entry(atoi(port_in), atoi(port_out));
-
-	return status;
-}
-
-static int handle_option_n(Tracee *tracee, const Cli *cli UNUSED, const char *value)
-{
-	int status = 0;
-
-	if(global_portmap_extension == NULL)
-		status = initialize_extension(tracee, portmap_callback, value);
-	if(status < 0)
-		return status;
-
-	status = activate_netcoop_mode();
-
-	return status;
-}
-
-#ifdef HAVE_PYTHON_EXTENSION
-static int handle_option_P(Tracee *tracee, const Cli *cli UNUSED, const char *value)
-{
-	(void) initialize_extension(tracee, python_callback, value);
 	return 0;
 }
-#endif
 
-static int handle_option_l(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
+static int handle_option_ashmem_memfd(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
 {
-	return initialize_extension(tracee, link2symlink_callback, NULL);
+	int status;
+
+	/* Initialize the ashmem-memfd extension.  */
+	status = initialize_extension(tracee, ashmem_memfd_callback, NULL);
+	if (status < 0)
+		note(tracee, WARNING, INTERNAL, "ashmem-memfd not initialized");
+
+	return 0;
+}
+
+static int handle_option_sysvipc(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
+{
+	int status;
+
+	/* Initialize the sysvipc extension.  */
+	status = initialize_extension(tracee, sysvipc_callback, NULL);
+	if (status < 0)
+		note(tracee, WARNING, INTERNAL, "sysvipc not initialized");
+
+	return 0;
+}
+
+static int handle_option_L(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
+{
+        (void) initialize_extension(tracee, fix_symlink_size_callback, NULL);
+        return 0;
+}
+
+static int handle_option_H(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
+{
+        (void) initialize_extension(tracee, hidden_files_callback, NULL);
+        return 0;
+}
+
+static int handle_option_p(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
+{
+        (void) initialize_extension(tracee, port_switch_callback, NULL);
+        return 0;
 }
 
 /**

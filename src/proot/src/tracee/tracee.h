@@ -30,20 +30,15 @@
 #include <sys/ptrace.h>/* enum __ptrace_request */
 #include <talloc.h>    /* talloc_*, */
 #include <stdint.h>    /* *int*_t, */
-#include <sys/wait.h>  /* __WAIT_* */
-#include "arch.h" /* word_t, user_regs_struct, */
-#include "compat.h"
 
-#if defined(__GLIBC__)
-#define PTRACE_REQUEST_TYPE	enum __ptrace_request
-#else
-#define PTRACE_REQUEST_TYPE	int
-#endif
+#include "arch.h" /* word_t, user_regs_struct, HAS_POKEDATA_WORKAROUND */
+#include "compat.h"
 
 typedef enum {
 	CURRENT  = 0,
 	ORIGINAL = 1,
 	MODIFIED = 2,
+	ORIGINAL_SECCOMP_REWRITE = 3,
 	NB_REG_VERSION
 } RegVersion;
 
@@ -98,9 +93,9 @@ typedef struct tracee {
 	 * dedicated to terminated tracees instead.  */
 	bool terminated;
 
-        /* Whether termination of this tracee implies an immediate kill
-         * of all tracees. */
-        bool killall_on_exit;
+	/* Whether termination of this tracee implies an immediate kill
+	 * of all tracees. */
+	bool killall_on_exit;
 
 	/* Parent of this tracee, NULL if none.  */
 	struct tracee *parent;
@@ -153,12 +148,18 @@ typedef struct tracee {
 				     && get_sysnum((tracee), ORIGINAL) == sysnum)
 
 	/* How this tracee is restarted.  */
-	PTRACE_REQUEST_TYPE restart_how;
+#ifdef __GLIBC__
+	enum __ptrace_request
+#else
+	int
+#endif
+		restart_how, last_restart_how;
 
 	/* Value of the tracee's general purpose registers.  */
 	struct user_regs_struct _regs[NB_REG_VERSION];
 	bool _regs_were_changed;
 	bool restore_original_regs;
+	bool restore_original_regs_after_seccomp_event;
 
 	/* State for the special handling of SIGSTOP.  */
 	enum {
@@ -166,6 +167,10 @@ typedef struct tracee {
 		SIGSTOP_ALLOWED,      /* Allow SIGSTOP (once the parent is known).   */
 		SIGSTOP_PENDING,      /* Block SIGSTOP until the parent is unknown.  */
 	} sigstop;
+
+	/* True if next SIGSYS caused by seccomp should be silently dropped
+	 * without affecting state of any registers.  */
+	bool skip_next_seccomp_signal;
 
 	/* Context used to collect all the temporary dynamic memory
 	 * allocations.  */
@@ -198,14 +203,28 @@ typedef struct tracee {
 		struct chained_syscalls *syscalls;
 		bool force_final_result;
 		word_t final_result;
+		enum {
+			SYSNUM_WORKAROUND_INACTIVE,
+			SYSNUM_WORKAROUND_PROCESS_FAULTY_CALL,
+			SYSNUM_WORKAROUND_PROCESS_REPLACED_CALL
+		} sysnum_workaround_state;
+		int suppressed_signal;
 	} chain;
 
 	/* Load info generated during execve sysenter and used during
 	 * execve sysexit.  */
 	struct load_info *load_info;
 
-	/* Disable mixed-execution (native host) check */
-	bool mixed_mode;
+#ifdef HAS_POKEDATA_WORKAROUND
+	word_t pokedata_workaround_stub_addr;
+	bool pokedata_workaround_cancelled_syscall;
+	bool pokedata_workaround_relaunched_syscall;
+#endif
+
+#ifdef ARCH_ARM64
+	bool is_aarch32;
+#endif
+
 
 	/**********************************************************************
 	 * Private but inherited resources                                    *
@@ -220,6 +239,9 @@ typedef struct tracee {
 	/* Ensure the sysexit stage is always hit under seccomp.  */
 	bool sysexit_pending;
 
+	/* If true, syscall entry was handled by seccomp and next SIGTRAP | 0x80
+	 * has to be ignored as it's same syscall entry */
+	bool seccomp_already_handled_enter;
 
 	/**********************************************************************
 	 * Shared or private resources, depending on the CLONE_FS/VM flags.   *
@@ -239,6 +261,7 @@ typedef struct tracee {
 	/* Path to the executable, à la /proc/self/exe.  */
 	char *exe;
 	char *new_exe;
+	char *host_exe;
 
 
 	/**********************************************************************
@@ -247,6 +270,7 @@ typedef struct tracee {
 
 	/* Runner command-line.  */
 	char **qemu;
+	bool skip_proot_loader;
 
 	/* Path to glue between the guest rootfs and the host rootfs.  */
 	const char *glue;
@@ -276,8 +300,6 @@ typedef struct tracee {
 #define TRACEE(a) talloc_get_type_abort(talloc_parent(talloc_parent(a)), Tracee)
 
 extern Tracee *get_tracee(const Tracee *tracee, pid_t pid, bool create);
-extern Tracee *get_ptracee(const Tracee *ptracer, pid_t pid, bool only_stopped,
-			bool only_with_pevent, word_t wait_options);
 extern Tracee *get_stopped_ptracee(const Tracee *ptracer, pid_t pid,
 				bool only_with_pevent, word_t wait_options);
 extern bool has_ptracees(const Tracee *ptracer, pid_t pid, word_t wait_options);
@@ -287,5 +309,8 @@ extern void terminate_tracee(Tracee *tracee);
 extern void free_terminated_tracees();
 extern int swap_config(Tracee *tracee1, Tracee *tracee2);
 extern void kill_all_tracees();
+
+typedef LIST_HEAD(tracees, tracee) Tracees;
+extern Tracees *get_tracees_list_head();
 
 #endif /* TRACEE_H */

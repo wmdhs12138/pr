@@ -28,7 +28,6 @@
 
 #include "tracee/tracee.h"
 #include "syscall/seccomp.h"
-#include "extension/portmap/portmap.h"
 
 /* List of possible events.  */
 typedef enum {
@@ -49,6 +48,12 @@ typedef enum {
 	 * If the extension returns < 0, then PRoot reports this errno
 	 * as-is.  */
 	HOST_PATH,
+
+	/* The canonicalization succeed: "(char *) data1" is the
+	 * translated path from the host point-of-view.  It can be
+	 * substituted by the extension.  If the extension returns <
+	 * 0, then PRoot reports this errno as-is.  */
+	TRANSLATED_PATH,
 
 	/* The tracee enters a syscall, and PRoot hasn't do anything
 	 * yet.  If the extension returns > 0, then PRoot skips its
@@ -74,12 +79,6 @@ typedef enum {
 	 * it.  If the extension returns < 0, then PRoot reports this
 	 * errno to the tracee.  */
 	SYSCALL_EXIT_END,
-
-	/* The canonicalization succeeds: "(char *) data1" is the
-	 * translated path from the host point-of-view. It can be
-	 * substituted by the extension. If the extension returns <
-	 * 0, then PRoot reports this errno as-is.  */
-	TRANSLATED_PATH,
 
 	/* The tracee is stopped either because of a syscall or a
 	 * signal: "(int) data1" is its new status as reported by
@@ -132,9 +131,22 @@ typedef enum {
 	 * for a detailed usage.  See print_usage() as an example.  */
 	PRINT_USAGE,
 
-    /* Called for every already opened file descriptor:
-     * "(const char *)" data1" is the path, "(int) data2" is the file descriptor" */
-    ALREADY_OPENED_FD,
+	/* A SIGSYS has occurred and we are going to see if any of the extensions wants to handle it for us*/
+	SIGSYS_OCC,
+
+        /* link2symlink notifies other extensions when it is moving
+         * a file */
+        LINK2SYMLINK_RENAME,
+
+        /* link2symlink notifies other extensions when it is unlinking
+         * a file */
+        LINK2SYMLINK_UNLINK,
+
+	/* statx() syscall was used by tracee and is being replaced by proot
+	 * data1 argument contains pointer to statx_syscall_state struct
+	 * defined in tracee/statx.h
+	 * */
+	STATX_SYSCALL,
 } ExtensionEvent;
 
 #define CLONE_RECONF ((word_t) -1)
@@ -189,18 +201,11 @@ static inline int notify_extensions(Tracee *tracee, ExtensionEvent event,
 /* Built-in extensions.  */
 extern int kompat_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
 extern int fake_id0_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
-extern int care_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
-extern int python_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
+extern int hidden_files_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
+extern int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
 extern int link2symlink_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
-
-/* Added extensions.  */
-/**
- * We use a global variable in order to support multiple port mapping options,
- * otherwise we would have a different extension instance for each (port_in, port_out) pair,
- * which would be a waste of memory and performance.
- * This variable is modified only once, in the INITIALIZATION event.
- */
-extern Extension *global_portmap_extension;
-extern int portmap_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
+extern int fix_symlink_size_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
+extern int ashmem_memfd_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
+extern int mountinfo_callback(Extension *extension, ExtensionEvent event, intptr_t d1, intptr_t d2);
 
 #endif /* EXTENSION_H */

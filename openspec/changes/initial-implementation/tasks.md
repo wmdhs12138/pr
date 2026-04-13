@@ -16,15 +16,17 @@
   - `src/extension/port_switch/` (P2)
   - `src/loader/loader-info.awk` (additional, new in termux-proot)
 
-- [ ] **T1.2** Merge modifications to existing proot source files (in src/proot/src/)
-  - `src/arch.h` — ARM64 definitions, POKEDATA workaround, loader addresses
-  - `src/tracee/tracee.h` — new struct fields (killall_on_exit, seccomp state, aarch32, chain)
-  - `src/tracee/mem.c` — ARM64 POKEDATA workaround assembly stub
-  - `src/tracee/event.c` — kill-on-exit logic, seccomp event dispatch
-  - `src/cli/proot.c` — new CLI option handlers
-  - `src/cli/proot.h` — option table with new options
-  - `src/extension/extension.h` — new events (SIGSYS_OCC, STATX_SYSCALL, LINK2SYMLINK_*)
-  - `src/syscall/seccomp.c` — Android-specific seccomp filter additions
+- [x] **T1.2** Merge modifications to existing proot source files (in src/proot/src/)
+  - Copied from vendor/termux-proot/ (Approach A: direct copy of termux versions)
+  - `src/arch.h` — ARM64 definitions, POKEDATA workaround, loader addresses, aarch32 support
+  - `src/tracee/tracee.h` — new struct fields (killall_on_exit, seccomp state, aarch32, chain, pokedata workaround)
+  - `src/tracee/mem.c` — ARM64 POKEDATA workaround assembly stub, ptrace_pokedata_or_via_stub()
+  - `src/tracee/event.c` — unified seccomp-aware event loop, SIGSYS handler dispatch, kill-on-exit
+  - `src/cli/proot.c` — new CLI option handlers (link2symlink, ashmem-memfd, sysvipc, -L, -H, -p)
+  - `src/cli/proot.h` — option table with new options, VERSION set to "5.4.0-pr"
+  - `src/extension/extension.h` — new events (SIGSYS_OCC, LINK2SYMLINK_RENAME/UNLINK, STATX_SYSCALL)
+  - `src/syscall/seccomp.c` — Android-specific seccomp filter additions (ioctl, memfd_create, statx)
+  - Note: 39 additional files also differ but deferred to build-time verification
 
 - [ ] **T1.3** Update src/proot/src/GNUmakefile
   - Add all new .o targets

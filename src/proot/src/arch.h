@@ -31,12 +31,8 @@
 typedef unsigned long word_t;
 typedef unsigned char byte_t;
 
-#define SYSCALL_AVOIDER ((word_t) -1)
+#define SYSCALL_AVOIDER ((word_t) -2)
 #define SYSTRAP_NUM SYSARG_NUM
-#define STACK_ALIGNMENT 16
-
-#define OFFSETOF_STATX_UID 20
-#define OFFSETOF_STATX_GID 24
 
 #if !defined(ARCH_X86_64) && !defined(ARCH_ARM_EABI) && !defined(ARCH_X86) && !defined(ARCH_SH4)
 #    if defined(__x86_64__)
@@ -105,15 +101,23 @@ typedef unsigned char byte_t;
     #define OFFSETOF_STAT_GID_32 0
     #define EM_ARM 40
 
-    #define LOADER_ADDRESS 0x10000000
+    #define LOADER_ADDRESS 0x20000000
 
     #define EXEC_PIC_ADDRESS   0x0f000000
     #define INTERP_PIC_ADDRESS 0x1f000000
 
+    /* The syscall number has to be valid on ARM, so use tuxcall(2) as
+     * the "void" syscall since it has no side effects.  */
+    #undef SYSCALL_AVOIDER
+    #define SYSCALL_AVOIDER ((word_t) 222)
+
 #elif defined(ARCH_ARM64)
 
     #define SYSNUMS_HEADER1 "syscall/sysnums-arm64.h"
+    #define SYSNUMS_HEADER2 "syscall/sysnums-arm.h"
+
     #define SYSNUMS_ABI1    sysnums_arm64
+    #define SYSNUMS_ABI2    sysnums_arm
 
     #define SYSTRAP_SIZE 4
 
@@ -121,16 +125,29 @@ typedef unsigned char byte_t;
         #define AUDIT_ARCH_AARCH64 (EM_AARCH64 | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE)
     #endif
 
-    #define SECCOMP_ARCHS { { .value = AUDIT_ARCH_AARCH64, .nb_abis = 1, .abis = { ABI_DEFAULT } } }
+    #define SECCOMP_ARCHS {									\
+		{ .value = AUDIT_ARCH_AARCH64, .nb_abis = 1, .abis = { ABI_DEFAULT } },	\
+		{ .value = AUDIT_ARCH_ARM,     .nb_abis = 1, .abis = { ABI_2 } }, 		\
+	}
 
     #define HOST_ELF_MACHINE {183, 0};
     #define RED_ZONE_SIZE 0
-    #define OFFSETOF_STAT_UID_32 0
-    #define OFFSETOF_STAT_GID_32 0
+    #define OFFSETOF_STAT_UID_32 24
+    #define OFFSETOF_STAT_GID_32 28
 
     #define LOADER_ADDRESS     0x2000000000
     #define EXEC_PIC_ADDRESS   0x3000000000
     #define INTERP_PIC_ADDRESS 0x3f00000000
+    #define HAS_POKEDATA_WORKAROUND true
+
+    #define HAS_LOADER_32BIT true
+    #define EXEC_PIC_ADDRESS_32   0x0f000000
+    #define INTERP_PIC_ADDRESS_32 0x1f000000
+
+    /* Syscall -2 appears to cause some odd side effects, use -1. */
+    /* See https://github.com/termux/termux-packages/pull/390 */
+    #undef SYSCALL_AVOIDER
+    #define SYSCALL_AVOIDER ((word_t) -1)
 
 #elif defined(ARCH_X86)
 
