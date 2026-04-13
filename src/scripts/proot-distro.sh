@@ -139,6 +139,54 @@ unset i
 
 #############################################################################
 #
+# SELF INITIALIZATION
+#
+# Ensure the runtime environment is ready before any command runs.
+#
+#############################################################################
+
+self_initialize() {
+	if [ ! -x "$(command -v proot)" ]; then
+		msg
+		msg "${BRED}Error: proot binary not found in PATH.${RST}"
+		msg "${BRED}Make sure proot is installed in ${APP_PREFIX}/bin/${RST}"
+		msg
+		exit 1
+	fi
+
+	if [ ! -d "${DISTRO_PLUGINS_DIR}" ]; then
+		msg
+		msg "${BRED}Error: plugin directory not found: ${DISTRO_PLUGINS_DIR}${RST}"
+		msg
+		exit 1
+	fi
+
+	local plugin_count
+	plugin_count=$(find "${DISTRO_PLUGINS_DIR}" -maxdepth 1 -name "*.sh" 2>/dev/null | wc -l)
+	if [ "$plugin_count" -eq 0 ]; then
+		msg
+		msg "${BRED}Error: no distribution plugins found in ${DISTRO_PLUGINS_DIR}${RST}"
+		msg
+		exit 1
+	fi
+
+	if [ ! -d "${RUNTIME_DIR}" ]; then
+		mkdir -p "${RUNTIME_DIR}"
+	fi
+
+	if [ ! -d "${INSTALLED_ROOTFS_DIR}" ]; then
+		mkdir -p "${INSTALLED_ROOTFS_DIR}"
+	fi
+
+	if [ ! -d "${DOWNLOAD_CACHE_DIR}" ]; then
+		mkdir -p "${DOWNLOAD_CACHE_DIR}"
+	fi
+}
+
+self_initialize
+
+#############################################################################
+#
 # ANTI ROOT FUSE
 #
 # This script should never be executed as root as can mess up the ownership,
@@ -476,11 +524,6 @@ command_install() {
 				msg
 				return 1
 			fi
-		fi
-
-		if [ ! -d "$DOWNLOAD_CACHE_DIR" ]; then
-			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Creating directory '$DOWNLOAD_CACHE_DIR'...${RST}"
-			mkdir -p "$DOWNLOAD_CACHE_DIR"
 		fi
 
 		local archive_name

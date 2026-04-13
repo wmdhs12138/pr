@@ -144,10 +144,14 @@
     - Added MIPS architecture mapping
   - Verified: all arch patterns match for both GNU and busybox file output
 
-- [ ] **T2.7** Add self_initialize() function
-  - Directory creation
-  - Binary verification (proot, busybox)
-  - Plugin directory check
+- [x] **T2.7** Add self_initialize() function
+  - Called once at script startup, after dependency check
+  - Verifies proot binary exists in PATH (clear error message with expected location)
+  - Verifies DISTRO_PLUGINS_DIR exists
+  - Verifies at least one plugin .sh file is present
+  - Creates RUNTIME_DIR, INSTALLED_ROOTFS_DIR, DOWNLOAD_CACHE_DIR if missing
+  - Removed redundant mkdir in command_install (now handled upfront)
+  - Exits with clear error messages if environment is broken
 
 - [ ] **T2.8** Update DEFAULT_FAKE_KERNEL_RELEASE
   - Change to `6.17.0-pr`
