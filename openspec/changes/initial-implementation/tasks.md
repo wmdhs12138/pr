@@ -65,9 +65,18 @@
 
 ## Phase 2 — Standalone proot-distro.sh
 
-- [ ] **T2.1** Fork proot-distro.sh from vendor/termux-proot-distro
-  - Copy to `src/scripts/proot-distro.sh`
-  - Replace shebang: `#!/system/bin/sh` or `#!${APP_PREFIX}/bin/busybox sh`
+- [x] **T2.1** Fork proot-distro.sh from vendor/termux-proot-distro
+  - Copied to `src/scripts/proot-distro.sh` (3172 lines)
+  - Shebang: `#!@APP_PREFIX@/bin/bash` (template, replaced by APK BootstrapService)
+  - Decision: bundle static bash binary (~2MB) — proot-distro.sh requires bash
+    features (declare -A associative arrays, [[ ]] tests, bash string manipulation)
+    that busybox ash does not support
+  - Copied 17 distro plugins to `src/scripts/plugins/` (excluded termux.sh)
+  - Plugins: alpine, almalinux, archlinux, artix, adelie, chimera, debian,
+    deepin, fedora, manjaro, opensuse, oracle, pardus, rockylinux, trisquel,
+    ubuntu, void
+  - @TERMUX_PREFIX@, @TERMUX_HOME@, @TERMUX_APP_PACKAGE@ still present in file;
+    will be replaced in T2.2
 
 - [ ] **T2.2** Replace all template variables
   - `@TERMUX_PREFIX@` → `${APP_PREFIX}`
@@ -96,6 +105,7 @@
 
 - [ ] **T2.5** Adapt dependency check
   - Remove `unzip`, `lscpu`, `curl` from required list
+  - Add `bash` to required list (for proot-distro.sh itself)
   - Verify utilities via busybox applet symlinks
   - Add `proot` check against `${APP_PREFIX}/bin/proot`
 
@@ -123,22 +133,28 @@
   - Test --isolated mode
   - Test backup/restore
 
-## Phase 3 — Busybox Integration
+## Phase 3 — Busybox & Bash Integration
 
 - [ ] **T3.1** Obtain static busybox binary for aarch64
   - Download pre-built or build from source with NDK
   - Verify all required applets present: `busybox --list`
 
-- [ ] **T3.2** Create busybox bootstrap function
-  - Copy binary to `${APP_PREFIX}/bin/busybox`
-  - `chmod 755 busybox`
+- [ ] **T3.2** Obtain static bash binary for aarch64
+  - proot-distro.sh requires bash (associative arrays, [[ ]], etc.)
+  - Download pre-built static bash or cross-compile with NDK
+  - ~2MB binary
+
+- [ ] **T3.3** Create bootstrap function
+  - Copy busybox to `${APP_PREFIX}/bin/busybox`
+  - Copy bash to `${APP_PREFIX}/bin/bash`
+  - `chmod 755` both
   - Create applet symlinks via `busybox --install -s ${APP_PREFIX}/bin/`
 
-- [ ] **T3.3** Verify tar compatibility
+- [ ] **T3.4** Verify tar compatibility
   - Test extraction of .tar.xz, .tar.gz, .tar.bz2 rootfs tarballs
   - Document any busybox tar limitations
 
-- [ ] **T3.4** Verify file command compatibility
+- [ ] **T3.5** Verify file command compatibility
   - Test `busybox file` against aarch64 and arm ELF binaries
   - Ensure detect_cpu_arch regex handles busybox output
 
@@ -153,8 +169,10 @@
 - [ ] **T4.2** Implement BootstrapService (first-run init)
   - Extract proot from native lib to files/usr/bin/
   - Extract busybox from assets to files/usr/bin/
-  - Create applet symlinks
-  - Copy proot-distro.sh from assets to files/usr/scripts/
+  - Extract bash from assets to files/usr/bin/
+  - Create applet symlinks via busybox --install
+  - Copy proot-distro.sh from assets to files/usr/bin/
+  - Replace @APP_PREFIX@ in proot-distro.sh shebang with actual path
   - Copy plugins from assets to files/usr/etc/proot-distro/
   - Create all data directories
 
@@ -183,7 +201,8 @@
 
 - [ ] **T4.7** Bundle assets
   - `assets/bin/busybox-arm64`
-  - `assets/scripts/proot-distro.sh`
+  - `assets/bin/bash-arm64`
+  - `assets/bin/proot-distro.sh` (with @APP_PREFIX@ template)
   - `assets/plugins/alpine.sh`, `debian.sh`, `ubuntu.sh`, `archlinux.sh`, `fedora.sh`
 
 ## Phase 5 — Distro Plugins & Testing
