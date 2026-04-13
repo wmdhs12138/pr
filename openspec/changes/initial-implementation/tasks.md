@@ -134,10 +134,15 @@
     wget, xargs (23 utilities, all busybox applets or our own binaries)
   - Add `proot` check against `${APP_PREFIX}/bin/proot`
 
-- [ ] **T2.6** Adapt CPU detection
-  - Remove Termux paths from detect_cpu_arch binary search list
-  - Replace lscpu usage with /proc/cpuinfo parsing
-  - Ensure busybox `file` output is handled correctly
+ - [x] **T2.6** Adapt CPU detection
+  - Termux paths already removed from detect_cpu_arch in T2.3
+  - lscpu already replaced with /proc/cpuinfo in T2.3
+  - detect_cpu_arch: replaced fragile `cut` pipeline with `grep -oE` regex
+    - Old: `file -L | cut -d':' -f2- | cut -d',' -f2 | cut -d' ' -f2-`
+    - New: `file -L | grep -oE '(ARM aarch64|ARM|UCB RISC-V|Intel 80386|x86-64|MIPS)'`
+    - Handles both GNU file and busybox file output formats
+    - Added MIPS architecture mapping
+  - Verified: all arch patterns match for both GNU and busybox file output
 
 - [ ] **T2.7** Add self_initialize() function
   - Directory creation

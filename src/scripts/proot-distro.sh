@@ -188,7 +188,7 @@ detect_cpu_arch() {
 	local i
 	for i in /usr/bin/bash /usr/bin/sh /usr/bin/su /usr/bin/busybox /bin/bash /bin/sh /bin/su /bin/busybox; do
 		if [ "$(dd if="${dist_path}${i}" bs=1 skip=1 count=3 2>/dev/null)" = "ELF" ]; then
-			cpu_arch=$(file -L "${dist_path}${i}" | cut -d':' -f2- | cut -d',' -f2 | cut -d' ' -f2-)
+			cpu_arch=$(file -L "${dist_path}${i}" 2>/dev/null | grep -oE '(ARM aarch64|ARM|UCB RISC-V|Intel 80386|x86-64|MIPS)')
 			[ -n "$cpu_arch" ] && break
 		fi
 	done
@@ -199,6 +199,7 @@ detect_cpu_arch() {
 		"UCB RISC-V") cpu_arch="riscv64";;
 		"Intel 80386") cpu_arch="i686";;
 		"x86-64") cpu_arch="x86_64";;
+		"MIPS") cpu_arch="mips";;
 		*) cpu_arch="unknown";;
 	esac
 
