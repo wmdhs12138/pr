@@ -92,19 +92,25 @@
   - Verified: `bash -n src/scripts/proot-distro.sh` passes with no errors
   - Verified: plugins have zero @TERMUX_*@ references
 
-- [ ] **T2.3** Remove all Termux-specific code
-  - Remove DISTRO_TYPE="termux" code paths in command_install
-  - Remove DISTRO_TYPE="termux" code paths in command_login
-  - Remove LD_PRELOAD save/restore
-  - Remove --termux-home option and bind logic
-  - Remove --shared-tmp option and bind logic
-  - Remove Termux prefix bind mount
-  - Remove Termux data directory bind mounts
-  - Remove GNU bash/tar version checks
-  - Remove dpkg architecture check
-  - Remove Termux paths from detect_cpu_arch
-  - Remove Termux-specific help text
-  - Remove termux.sh plugin reference
+- [x] **T2.3** Remove all Termux-specific code
+  - Removed DISTRO_TYPE="termux" code paths in command_install (entire zip/SYMLINKS block)
+  - Removed DISTRO_TYPE="termux" code paths in command_login (termux env/shell setup)
+  - Removed DISTRO_TYPE="termux" code paths in run_proot_cmd (termux proot invocation)
+  - Removed LD_PRELOAD save/restore (TERMUX_LDPRELOAD + all unset/restore patterns)
+  - Removed --termux-home option parsing and bind logic
+  - Removed --shared-tmp option parsing and bind logic
+  - Removed Termux prefix bind mount guards (always bind now)
+  - Removed GNU bash/tar version checks (3 occurrences)
+  - Removed dpkg architecture check at entry point
+  - Removed lscpu 32-bit check — replaced with /proc/cpuinfo parsing
+  - Removed curl, lscpu, unzip, xz from dependency check
+  - Removed Termux path from detect_cpu_arch search list
+  - Removed Termux-specific help text (--termux-home, --shared-tmp, termux distro notes)
+  - Fixed GECOS field in passwd: "Termux" → "proot-distro"
+  - Fixed fake /proc/version: "proot@termux" → "proot@pr"
+  - Script reduced from 3176 to 2957 lines (219 lines removed)
+  - All `!= "termux"` guards simplified (always true, removed condition)
+  - Syntax verified: bash -n passes
 
 - [ ] **T2.4** Adapt download mechanism
   - Replace `curl -Lo` with `busybox wget -O`

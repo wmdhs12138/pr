@@ -126,8 +126,8 @@ msg() {
 #
 #############################################################################
 
-for i in awk basename bzip2 cat chmod cp curl cut du file find grep gzip \
-	head id lscpu mkdir proot rm sed tar unzip xargs xz; do
+for i in awk basename bzip2 cat chmod cp cut du file find grep gzip \
+	head id mkdir proot rm sed tar xargs; do
 	if [ -z "$(command -v "$i")" ]; then
 		msg
 		msg "${BRED}Utility '${i}' is not installed. Cannot continue.${RST}"
@@ -136,20 +136,6 @@ for i in awk basename bzip2 cat chmod cp curl cut du file find grep gzip \
 	fi
 done
 unset i
-
-# Notify user if bin/bash is not a GNU Bash.
-if ! grep -q '^GNU bash' <(bash --version 2>/dev/null | head -n 1); then
-	msg
-	msg "${BRED}Warning: bash binary that is available in PATH appears to be not a GNU bash. You may experience issues during installation, backup and restore operations.${RST}"
-	msg
-fi
-
-# Notify user if tar available in PATH is not GNU tar.
-if ! grep -q '^tar (GNU tar)' <(tar --version 2>/dev/null | head -n 1); then
-	msg
-	msg "${BRED}Warning: tar binary that is available in PATH appears to be not a GNU tar. You may experience issues during installation, backup and restore operations.${RST}"
-	msg
-fi
 
 #############################################################################
 #
@@ -162,7 +148,7 @@ fi
 
 if [ "$(id -u)" = "0" ]; then
 	msg
-	msg "${BRED}Warning: ${PROGRAM_NAME} should not be executed as root user. Do not send bug reports about messed up Termux environment, lost data and bricked devices.${RST}"
+	msg "${BRED}Warning: ${PROGRAM_NAME} should not be executed as root user. Do not send bug reports about messed up environment, lost data and bricked devices.${RST}"
 	msg
 fi
 
@@ -200,7 +186,7 @@ detect_cpu_arch() {
 	local cpu_arch
 
 	local i
-	for i in /usr/bin/bash /usr/bin/sh /usr/bin/su /usr/bin/busybox /data/data/com.termux/files/usr/bin/bash /bin/bash /bin/sh /bin/su /bin/busybox; do
+	for i in /usr/bin/bash /usr/bin/sh /usr/bin/su /usr/bin/busybox /bin/bash /bin/sh /bin/su /bin/busybox; do
 		if [ "$(dd if="${dist_path}${i}" bs=1 skip=1 count=3 2>/dev/null)" = "ELF" ]; then
 			cpu_arch=$(file -L "${dist_path}${i}" | cut -d':' -f2- | cut -d',' -f2 | cut -d' ' -f2-)
 			[ -n "$cpu_arch" ] && break
@@ -380,7 +366,6 @@ command_install() {
 		fi
 
 		# This will define logic for handling the distribution.
-		# Possible values for now: normal, termux.
 		DISTRO_TYPE="normal"
 
 		# This should be overridden in distro plug-in with valid URL for
@@ -410,7 +395,7 @@ command_install() {
 
 		# Exit with error if specified distribution type is unknown
 		case "${DISTRO_TYPE}" in
-			normal|termux);;
+			normal);;
 			*)
 				msg "${BLUE}[${RED}!${BLUE}] ${CYAN}The distribution has unsupported type '${DISTRO_TYPE}'.${RST}"
 				return 1
@@ -489,154 +474,107 @@ command_install() {
 
 		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Extracting rootfs, please wait...${RST}"
 
-		if [ "${DISTRO_TYPE}" = "termux" ]; then
-			mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/files/home"
-			if [ "$(file --brief --mime-type "${DOWNLOAD_CACHE_DIR}/${archive_name}")" = "application/zip" ]; then
-				# Termux uses plain ZIP archive to deliver bootstrap environment.
-				# It contains only directories and files. Access modes typically
-				# recorded within the archive too.
-				unzip -q -d "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/files/usr" \
-					"${DOWNLOAD_CACHE_DIR}/${archive_name}"
-			else
-				# Fall back to tar if format isn't zip.
-				mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/files/usr"
-				tar -C "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/files/usr" \
-					--warning=no-unknown-keyword --delay-directory-restore \
-					--preserve-permissions --strip="${TARBALL_STRIP_OPT}" \
-					-xf "${DOWNLOAD_CACHE_DIR}/${archive_name}"
-			fi
+		# --exclude='dev' - need to exclude /dev directory which may contain device files.
+		# --delay-directory-restore - set directory permissions only when files were extracted
+		#                             to avoid issues with Arch Linux bootstrap archives.
+		set +e
+		proot --link2symlink \
+			tar -C "${INSTALLED_ROOTFS_DIR}/${distro_name}" --warning=no-unknown-keyword \
+			--delay-directory-restore --preserve-permissions --strip="${TARBALL_STRIP_OPT}" \
+			-xf "${DOWNLOAD_CACHE_DIR}/${archive_name}" --exclude='dev' |& grep -v "/linkerconfig/" >&2
+		set -e
 
-			local cur_wd=$(pwd)
-			cd "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/files/usr"
-
-			# Symlinks must be manually restored using instructions from
-			# file 'SYMLINKS.txt'.
-			if [ -f "./SYMLINKS.txt" ]; then
-				msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Creating symlinks, please wait...${RST}"
-				cat SYMLINKS.txt | while IFS='←' read -r src dst; do
-					ln -s "$src" "$dst"
-				done
-				rm -f "./SYMLINKS.txt"
-			fi
-
-			cd "$cur_wd"
-
-			if [ -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/files/usr/etc/bash.bashrc" ]; then
-				msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Updating PS1 in bash.bashrc...${RST}"
-				echo '# Added by proot-distro:' >> \
-					"${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/files/usr/etc/bash.bashrc"
-				echo 'PS1="\\[\\e[0;35m\\]\\\PD\\\\\[\\e[0m\\] ${PS1}"' >> \
-					"${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/files/usr/etc/bash.bashrc"
-			fi
-		else
-			# Prevent possible conflicts with proot.
-			unset LD_PRELOAD
-
-			# --exclude='dev' - need to exclude /dev directory which may contain device files.
-			# --delay-directory-restore - set directory permissions only when files were extracted
-			#                             to avoid issues with Arch Linux bootstrap archives.
-			set +e
-			proot --link2symlink \
-				tar -C "${INSTALLED_ROOTFS_DIR}/${distro_name}" --warning=no-unknown-keyword \
-				--delay-directory-restore --preserve-permissions --strip="${TARBALL_STRIP_OPT}" \
-				-xf "${DOWNLOAD_CACHE_DIR}/${archive_name}" --exclude='dev' |& grep -v "/linkerconfig/" >&2
-			set -e
-
-			# Restore LD_PRELOAD after proot.
-			[ -n "$TERMUX_LDPRELOAD" ] && export LD_PRELOAD="$TERMUX_LDPRELOAD"
-
-			# If no /etc in rootfs, terminate installation.
-			# This usually indicates that downloaded distribution archive doesn't contain
-			# actual rootfs, wrong tar strip option was specified or the distribution has
-			# high grade of customization and doesn't respect FHS standard.
-			if [ ! -e "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc" ]; then
-				msg
-				msg "${BRED}Error: the rootfs of distribution '${YELLOW}${distro_name}${BRED}' has unexpected structure (no /etc directory). Make sure that variable TARBALL_STRIP_OPT specified in distribution plug-in is correct.${RST}"
-				msg
-				return 1
-			fi
-
-			# Write important environment variables to /etc/environment.
-			chmod u+rw "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" >/dev/null 2>&1 || true
-			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Writing file '${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment'...${RST}"
-			for var in ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT \
-				ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH COLORTERM \
-				DEX2OATBOOTCLASSPATH EXTERNAL_STORAGE; do
-				set +u
-				if [ -n "${!var}" ]; then
-					echo "${var}=${!var}" >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
-				fi
-				set -u
-			done
-			unset var
-			# Don't touch these variables.
-			# TERM is being inherited from currect environment. Otherwise it is being
-			# set to xterm-256color (Termux app default).
-			cat <<- EOF >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
-			LANG=en_US.UTF-8
-			MOZ_FAKE_NO_SANDBOX=1
-			PATH=${DEFAULT_PATH_ENV}
-			PULSE_SERVER=127.0.0.1
-			TERM=${TERM-xterm-256color}
-			TMPDIR=/tmp
-			EOF
-
-			# Fix PATH in some configuration files.
-			for f in /etc/bash.bashrc /etc/profile /etc/login.defs; do
-				[ ! -e "${INSTALLED_ROOTFS_DIR}/${distro_name}${f}" ] && continue
-				msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Updating PATH in '${INSTALLED_ROOTFS_DIR}/${distro_name}${f}' if needed...${RST}"
-				sed -i -E "s@\<(PATH=)(\"?[^\"[:space:]]+(\"|\$|\>))@\1\"${DEFAULT_PATH_ENV}\"@g" \
-					"${INSTALLED_ROOTFS_DIR}/${distro_name}${f}"
-			done
-			unset f
-
-			# Default /etc/resolv.conf may be empty or unsuitable for use.
-			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Creating file '${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/resolv.conf'...${RST}"
-			rm -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/resolv.conf"
-			cat <<- EOF > "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/resolv.conf"
-			nameserver ${DEFAULT_PRIMARY_NAMESERVER}
-			nameserver ${DEFAULT_SECONDARY_NAMESERVER}
-			EOF
-
-			# Default /etc/hosts may be empty or incomplete.
-			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Creating file '${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/hosts'...${RST}"
-			chmod u+rw "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/hosts" >/dev/null 2>&1 || true
-			cat <<- EOF > "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/hosts"
-			# IPv4.
-			127.0.0.1   localhost.localdomain localhost
-
-			# IPv6.
-			::1         localhost.localdomain localhost ip6-localhost ip6-loopback
-			fe00::0     ip6-localnet
-			ff00::0     ip6-mcastprefix
-			ff02::1     ip6-allnodes
-			ff02::2     ip6-allrouters
-			ff02::3     ip6-allhosts
-			EOF
-
-			# Add Android-specific UIDs/GIDs to /etc/group and /etc/gshadow.
-			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Registering Android-specific UIDs and GIDs...${RST}"
-			chmod u+rw "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" \
-				"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/shadow" \
-				"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/group" \
-				"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow" >/dev/null 2>&1 || true
-			echo "aid_$(id -un):x:$(id -u):$(id -g):Termux:/:/sbin/nologin" >> \
-				"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd"
-			echo "aid_$(id -un):*:18446:0:99999:7:::" >> \
-				"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/shadow"
-			local group_name group_id
-			while read -r group_name group_id; do
-				echo "aid_${group_name}:x:${group_id}:root,aid_$(id -un)" \
-					>> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/group"
-				if [ -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow" ]; then
-					echo "aid_${group_name}:*::root,aid_$(id -un)" \
-						>> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow"
-				fi
-			done < <(paste <(id -Gn | tr ' ' '\n') <(id -G | tr ' ' '\n'))
-
-			# Ensure that proot will be able to bind fake /proc and /sys entries.
-			setup_fake_sysdata
+		# If no /etc in rootfs, terminate installation.
+		# This usually indicates that downloaded distribution archive doesn't contain
+		# actual rootfs, wrong tar strip option was specified or the distribution has
+		# high grade of customization and doesn't respect FHS standard.
+		if [ ! -e "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc" ]; then
+			msg
+			msg "${BRED}Error: the rootfs of distribution '${YELLOW}${distro_name}${BRED}' has unexpected structure (no /etc directory). Make sure that variable TARBALL_STRIP_OPT specified in distribution plug-in is correct.${RST}"
+			msg
+			return 1
 		fi
+
+		# Write important environment variables to /etc/environment.
+		chmod u+rw "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" >/dev/null 2>&1 || true
+		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Writing file '${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment'...${RST}"
+		for var in ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT \
+			ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH COLORTERM \
+			DEX2OATBOOTCLASSPATH EXTERNAL_STORAGE; do
+			set +u
+			if [ -n "${!var}" ]; then
+				echo "${var}=${!var}" >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
+			fi
+			set -u
+		done
+		unset var
+		# Don't touch these variables.
+		# TERM is being inherited from current environment. Otherwise it is being
+		# set to xterm-256color (default).
+		cat <<- EOF >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
+		LANG=en_US.UTF-8
+		MOZ_FAKE_NO_SANDBOX=1
+		PATH=${DEFAULT_PATH_ENV}
+		PULSE_SERVER=127.0.0.1
+		TERM=${TERM-xterm-256color}
+		TMPDIR=/tmp
+		EOF
+
+		# Fix PATH in some configuration files.
+		for f in /etc/bash.bashrc /etc/profile /etc/login.defs; do
+			[ ! -e "${INSTALLED_ROOTFS_DIR}/${distro_name}${f}" ] && continue
+			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Updating PATH in '${INSTALLED_ROOTFS_DIR}/${distro_name}${f}' if needed...${RST}"
+			sed -i -E "s@\<(PATH=)(\"?[^\"[:space:]]+(\"|\$|\>))@\1\"${DEFAULT_PATH_ENV}\"@g" \
+				"${INSTALLED_ROOTFS_DIR}/${distro_name}${f}"
+		done
+		unset f
+
+		# Default /etc/resolv.conf may be empty or unsuitable for use.
+		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Creating file '${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/resolv.conf'...${RST}"
+		rm -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/resolv.conf"
+		cat <<- EOF > "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/resolv.conf"
+		nameserver ${DEFAULT_PRIMARY_NAMESERVER}
+		nameserver ${DEFAULT_SECONDARY_NAMESERVER}
+		EOF
+
+		# Default /etc/hosts may be empty or incomplete.
+		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Creating file '${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/hosts'...${RST}"
+		chmod u+rw "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/hosts" >/dev/null 2>&1 || true
+		cat <<- EOF > "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/hosts"
+		# IPv4.
+		127.0.0.1   localhost.localdomain localhost
+
+		# IPv6.
+		::1         localhost.localdomain localhost ip6-localhost ip6-loopback
+		fe00::0     ip6-localnet
+		ff00::0     ip6-mcastprefix
+		ff02::1     ip6-allnodes
+		ff02::2     ip6-allrouters
+		ff02::3     ip6-allhosts
+		EOF
+
+		# Add Android-specific UIDs/GIDs to /etc/group and /etc/gshadow.
+		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Registering Android-specific UIDs and GIDs...${RST}"
+		chmod u+rw "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" \
+			"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/shadow" \
+			"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/group" \
+			"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow" >/dev/null 2>&1 || true
+		echo "aid_$(id -un):x:$(id -u):$(id -g):proot-distro:/:/sbin/nologin" >> \
+			"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd"
+		echo "aid_$(id -un):*:18446:0:99999:7:::" >> \
+			"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/shadow"
+		local group_name group_id
+		while read -r group_name group_id; do
+			echo "aid_${group_name}:x:${group_id}:root,aid_$(id -un)" \
+				>> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/group"
+			if [ -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow" ]; then
+				echo "aid_${group_name}:*::root,aid_$(id -un)" \
+					>> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow"
+			fi
+		done < <(paste <(id -Gn | tr ' ' '\n') <(id -G | tr ' ' '\n'))
+
+		# Ensure that proot will be able to bind fake /proc and /sys entries.
+		setup_fake_sysdata
 
 		# Run optional distro-specific hook.
 		if declare -f -F distro_setup >/dev/null 2>&1; then
@@ -775,103 +713,44 @@ run_proot_cmd() {
 		fi
 	fi
 
-	if [ "${DISTRO_TYPE-normal}" = "termux" ]; then
-		local -a extra_binds
-		local system_mnt
-		for system_mnt in /apex /odm /product /system /system_ext /vendor \
-			/linkerconfig/ld.config.txt \
-			/linkerconfig/com.android.art/ld.config.txt \
-			/plat_property_contexts /property_contexts; do
+	# Ensure that proot will be able to bind fake /proc and /sys entries.
+	setup_fake_sysdata
 
-			if [ -e "$system_mnt" ]; then
-				system_mnt=$(realpath "$system_mnt")
-			else
-				continue
-			fi
+	# With this tools should assume that no SELinux present.
+	set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/sys/.empty:/sys/fs/selinux" "$@"
 
-			if [ -d "$system_mnt" ]; then
-				local dir_mode
-				dir_mode=$(stat --format='%a' "$system_mnt")
-				if [[ ${dir_mode:2} =~ ^[157]$ ]]; then
-					extra_binds+=("--bind=${system_mnt}")
-				fi
-			elif [ -f "$system_mnt" ]; then
-				if head -c 1 "$system_mnt" >/dev/null 2>&1; then
-					extra_binds+=("--bind=${system_mnt}")
-				fi
-			else
-				continue
-			fi
-		done
-
-		# Prevent possible conflicts with proot.
-		unset LD_PRELOAD
-
-		# shellcheck disable=SC2086 # ${cpu_emulator_arg} should expand into nothing rather than into ''.
-		proot ${cpu_emulator_arg} \
-			-L \
-			--kill-on-exit \
-			--rootfs="${INSTALLED_ROOTFS_DIR}/${distro_name}" \
-			--cwd=/ \
-			--bind=/dev \
-			--bind=/proc \
-			--bind=/sys \
-			"${extra_binds[@]}" \
-			/data/data/com.termux/files/usr/bin/env \
-			HOME="/data/data/com.termux/files/home" \
-			PATH="/data/data/com.termux/files/usr/bin" \
-			PREFIX="/data/data/com.termux/files/usr" \
-			TMPDIR="/data/data/com.termux/files/usr/tmp" \
+	# shellcheck disable=SC2086 # ${cpu_emulator_arg} should expand into nothing rather than into ''.
+	proot ${cpu_emulator_arg} \
+		-L \
+		--kernel-release="${DEFAULT_FAKE_KERNEL_RELEASE}" \
+		--link2symlink \
+		--kill-on-exit \
+		--rootfs="${INSTALLED_ROOTFS_DIR}/${distro_name}" \
+		--root-id \
+		--cwd=/root \
+		--bind=/dev \
+		--bind="/dev/urandom:/dev/random" \
+		--bind=/proc \
+		--bind="/proc/self/fd:/dev/fd" \
+		--bind="/proc/self/fd/0:/dev/stdin" \
+		--bind="/proc/self/fd/1:/dev/stdout" \
+		--bind="/proc/self/fd/2:/dev/stderr" \
+		--bind=/sys \
+		--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.loadavg:/proc/loadavg" \
+		--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.stat:/proc/stat" \
+		--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.uptime:/proc/uptime" \
+		--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.version:/proc/version" \
+		--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.vmstat:/proc/vmstat" \
+		--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap" \
+		--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches" \
+		--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/sys/.empty:/sys/fs/selinux" \
+		/usr/bin/env -i \
+			"HOME=/root" \
+			"LANG=C.UTF-8" \
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+			"TERM=${TERM-xterm-256color}" \
+			"TMPDIR=/tmp" \
 			"$@"
-
-		# Restore LD_PRELOAD after proot.
-		[ -n "$TERMUX_LDPRELOAD" ] && export LD_PRELOAD="$TERMUX_LDPRELOAD"
-	else
-		# Ensure that proot will be able to bind fake /proc and /sys entries.
-		setup_fake_sysdata
-
-		# With this tools should assume that no SELinux present.
-		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/sys/.empty:/sys/fs/selinux" "$@"
-
-		# Prevent possible conflicts with proot.
-		unset LD_PRELOAD
-
-		# shellcheck disable=SC2086 # ${cpu_emulator_arg} should expand into nothing rather than into ''.
-		proot ${cpu_emulator_arg} \
-			-L \
-			--kernel-release="${DEFAULT_FAKE_KERNEL_RELEASE}" \
-			--link2symlink \
-			--kill-on-exit \
-			--rootfs="${INSTALLED_ROOTFS_DIR}/${distro_name}" \
-			--root-id \
-			--cwd=/root \
-			--bind=/dev \
-			--bind="/dev/urandom:/dev/random" \
-			--bind=/proc \
-			--bind="/proc/self/fd:/dev/fd" \
-			--bind="/proc/self/fd/0:/dev/stdin" \
-			--bind="/proc/self/fd/1:/dev/stdout" \
-			--bind="/proc/self/fd/2:/dev/stderr" \
-			--bind=/sys \
-			--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.loadavg:/proc/loadavg" \
-			--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.stat:/proc/stat" \
-			--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.uptime:/proc/uptime" \
-			--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.version:/proc/version" \
-			--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.vmstat:/proc/vmstat" \
-			--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap" \
-			--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches" \
-			--bind="${INSTALLED_ROOTFS_DIR}/${distro_name}/sys/.empty:/sys/fs/selinux" \
-			/usr/bin/env -i \
-				"HOME=/root" \
-				"LANG=C.UTF-8" \
-				"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-				"TERM=${TERM-xterm-256color}" \
-				"TMPDIR=/tmp" \
-				"$@"
-
-		# Restore LD_PRELOAD after proot.
-		[ -n "$TERMUX_LDPRELOAD" ] && export LD_PRELOAD="$TERMUX_LDPRELOAD"
-	fi
 }
 
 # A function for preparing fake content for certain system data interfaces
@@ -925,7 +804,7 @@ setup_fake_sysdata() {
 
 	if [ ! -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.version" ]; then
 		cat <<- EOF > "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.version"
-		Linux version ${DEFAULT_FAKE_KERNEL_RELEASE} (proot@termux) (gcc (GCC) 13.3.0, GNU ld (GNU Binutils) 2.42) ${DEFAULT_FAKE_KERNEL_VERSION}
+		Linux version ${DEFAULT_FAKE_KERNEL_RELEASE} (proot@pr) (gcc (GCC) 13.3.0, GNU ld (GNU Binutils) 2.42) ${DEFAULT_FAKE_KERNEL_VERSION}
 		EOF
 	fi
 
@@ -1550,8 +1429,6 @@ command_reset_help() {
 command_login() {
 	local fix_low_ports=false
 	local isolated_environment=false
-	local use_termux_home=false
-	local make_host_tmp_shared=false
 	local -a custom_fs_bindings
 	local no_link2symlink=false
 	local no_sysvipc=false
@@ -1580,12 +1457,6 @@ command_login() {
 				;;
 			--isolated)
 				isolated_environment=true
-				;;
-			--termux-home)
-				use_termux_home=true
-				;;
-			--shared-tmp)
-				make_host_tmp_shared=true
 				;;
 			--bind)
 				if [ $# -ge 2 ]; then
@@ -1789,116 +1660,102 @@ command_login() {
 	fi
 
 	local login_home login_shell
-	if [ "${dist_type-normal}" = "termux" ]; then
-		if [ -z "${login_wd}" ]; then
-			login_wd="/data/data/com.termux/files/home"
-		fi
-		login_shell="/data/data/com.termux/files/usr/bin/login"
-		set -- "/data/data/com.termux/files/usr/bin/env" \
-			"HOME=/data/data/com.termux/files/home" \
-			"PATH=/data/data/com.termux/files/usr/bin" \
-			"PREFIX=/data/data/com.termux/files/usr" \
-			"TMPDIR=/data/data/com.termux/files/usr/tmp" \
-			"${login_shell}" \
-			"$@"
-	else
-		if [ -d "${INSTALLED_ROOTFS_DIR}/${distro_name}/.l2s" ]; then
-			export PROOT_L2S_DIR="${INSTALLED_ROOTFS_DIR}/${distro_name}/.l2s"
-		fi
-
-		# It's hard to work without /etc/passwd.
-		if [ ! -e "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" ]; then
-			msg "${BRED}Error: the selected distribution doesn't have /etc/passwd.${RST}"
-			return 1
-		fi
-
-		# Catch invalid specified user before login command will be executed.
-		if ! grep -q "${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" >/dev/null 2>&1; then
-			msg "${BRED}Error: no user '${YELLOW}${login_user}${BRED}' defined in /etc/passwd of distribution.${RST}"
-			return 1
-		fi
-
-		local login_uid login_gid
-		login_uid=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 3)
-		if [ -z "${login_uid}" ]; then
-			msg "${BRED}Error: failed to retrieve the id of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
-			return 1
-		fi
-		login_gid=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 4)
-		if [ -z "${login_gid}" ]; then
-			msg "${BRED}Error: failed to retrieve the primary group id of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
-			return 1
-		fi
-		login_home=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 6)
-		if [ -z "${login_home}" ]; then
-			msg "${BRED}Error: failed to retrieve the home of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
-			return 1
-		fi
-		if [ -z "${login_wd}" ]; then
-			login_wd="${login_home}"
-		fi
-		#if [ ! -d "$(realpath "${INSTALLED_ROOTFS_DIR}/${distro_name}/${login_wd}")" ]; then
-		#	msg "${BRED}Warning: cannot use path '${YELLOW}${login_wd}${BRED}' as working directory.${RST}"
-		#fi
-		login_shell=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 7)
-		if [ -z "${login_shell}" ]; then
-			msg "${BRED}Error: failed to retrieve the shell of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
-			return 1
-		fi
-
-		# Update Android-specific variables in /etc/environment.
-		# Needed to handle changes after Android OS was upgraded.
-		chmod u+rw "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" >/dev/null 2>&1 || true
-		for var in ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT \
-			ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH \
-			DEX2OATBOOTCLASSPATH; do
-			set +u
-			if [ -n "${!var}" ]; then
-				# Create new variable entry instead of editing as variable may
-				# not exist in the file.
-				sed -i "/^${var}=/d" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
-				echo "${var}=${!var}" >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
-			fi
-			set -u
-		done
-		unset var
-
-		for var in ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT \
-			ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH \
-			DEX2OATBOOTCLASSPATH EXTERNAL_STORAGE; do
-			set +u
-			if [ -n "${!var}" ]; then
-				login_env_vars+=("${var}=${!var}")
-			fi
-			set -u
-		done
-		unset var
-
-		# Handle /etc/environment.
-		if [ -e "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" ]; then
-			mapfile -t -O "${#login_env_vars[@]}" login_env_vars < <(
-				grep -P '^[A-Za-z_][A-Za-z0-9_]+=.+' "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" | \
-					sed -E \
-						-e "s/^([^=]+=)['\"]/\1/g" \
-						-e "s/['\"]\$//g" \
-						-e "/^[^=]+\$/d"
-			)
-		fi
-
-		# Using '-i' to ensure that we can fully control which
-		# environment variables will be inherited by shell.
-		set -- "/usr/bin/env" "-i" \
-			"${login_env_vars[@]}" \
-			"COLORTERM=${COLORTERM-}" \
-			"HOME=${login_home}" \
-			"USER=${login_user}" \
-			"TERM=${TERM-xterm-256color}" \
-			"${login_shell}" \
-			"-l" \
-			"$@"
-
-		set -- "--change-id=${login_uid}:${login_gid}" "$@"
+	if [ -d "${INSTALLED_ROOTFS_DIR}/${distro_name}/.l2s" ]; then
+		export PROOT_L2S_DIR="${INSTALLED_ROOTFS_DIR}/${distro_name}/.l2s"
 	fi
+
+	# It's hard to work without /etc/passwd.
+	if [ ! -e "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" ]; then
+		msg "${BRED}Error: the selected distribution doesn't have /etc/passwd.${RST}"
+		return 1
+	fi
+
+	# Catch invalid specified user before login command will be executed.
+	if ! grep -q "${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" >/dev/null 2>&1; then
+		msg "${BRED}Error: no user '${YELLOW}${login_user}${BRED}' defined in /etc/passwd of distribution.${RST}"
+		return 1
+	fi
+
+	local login_uid login_gid
+	login_uid=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 3)
+	if [ -z "${login_uid}" ]; then
+		msg "${BRED}Error: failed to retrieve the id of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
+		return 1
+	fi
+	login_gid=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 4)
+	if [ -z "${login_gid}" ]; then
+		msg "${BRED}Error: failed to retrieve the primary group id of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
+		return 1
+	fi
+	login_home=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 6)
+	if [ -z "${login_home}" ]; then
+		msg "${BRED}Error: failed to retrieve the home of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
+		return 1
+	fi
+	if [ -z "${login_wd}" ]; then
+		login_wd="${login_home}"
+	fi
+	#if [ ! -d "$(realpath "${INSTALLED_ROOTFS_DIR}/${distro_name}/${login_wd}")" ]; then
+	#	msg "${BRED}Warning: cannot use path '${YELLOW}${login_wd}${BRED}' as working directory.${RST}"
+	#fi
+	login_shell=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 7)
+	if [ -z "${login_shell}" ]; then
+		msg "${BRED}Error: failed to retrieve the shell of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
+		return 1
+	fi
+
+	# Update Android-specific variables in /etc/environment.
+	# Needed to handle changes after Android OS was upgraded.
+	chmod u+rw "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" >/dev/null 2>&1 || true
+	for var in ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT \
+		ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH \
+		DEX2OATBOOTCLASSPATH; do
+		set +u
+		if [ -n "${!var}" ]; then
+			# Create new variable entry instead of editing as variable may
+			# not exist in the file.
+			sed -i "/^${var}=/d" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
+			echo "${var}=${!var}" >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
+		fi
+		set -u
+	done
+	unset var
+
+	for var in ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT \
+		ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH \
+		DEX2OATBOOTCLASSPATH EXTERNAL_STORAGE; do
+		set +u
+		if [ -n "${!var}" ]; then
+			login_env_vars+=("${var}=${!var}")
+		fi
+		set -u
+	done
+	unset var
+
+	# Handle /etc/environment.
+	if [ -e "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" ]; then
+		mapfile -t -O "${#login_env_vars[@]}" login_env_vars < <(
+			grep -P '^[A-Za-z_][A-Za-z0-9_]+=.+' "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" | \
+				sed -E \
+					-e "s/^([^=]+=)['\"]/\1/g" \
+					-e "s/['\"]\$//g" \
+					-e "/^[^=]+\$/d"
+		)
+	fi
+
+	# Using '-i' to ensure that we can fully control which
+	# environment variables will be inherited by shell.
+	set -- "/usr/bin/env" "-i" \
+		"${login_env_vars[@]}" \
+		"COLORTERM=${COLORTERM-}" \
+		"HOME=${login_home}" \
+		"USER=${login_user}" \
+		"TERM=${TERM-xterm-256color}" \
+		"${login_shell}" \
+		"-l" \
+		"$@"
+
+	set -- "--change-id=${login_uid}:${login_gid}" "$@"
 
 	set -- "--rootfs=${INSTALLED_ROOTFS_DIR}/${distro_name}" "$@"
 	set -- "--cwd=${login_wd}" "$@"
@@ -1991,7 +1848,7 @@ command_login() {
 		msg "${BRED}Warning: option '${YELLOW}--no-kill-on-exit${BRED}' is enabled. When exiting, your session will be blocked until all processes are terminated.${RST}"
 	fi
 
-	if [ "${dist_type-normal}" != "termux" ] && ! $no_link2symlink; then
+	if ! $no_link2symlink; then
 		# Support hardlinks.
 		set -- "--link2symlink" "$@"
 	fi
@@ -2005,7 +1862,7 @@ command_login() {
 	# Fix this behavior by reporting a fake up-to-date kernel version.
 	set -- "--kernel-release=\\Linux\\${hostname}\\${kernel_release}\\${DEFAULT_FAKE_KERNEL_VERSION}\\$(uname -m)\\localdomain\\-1\\" "$@"
 
-	# Fix lstat to prevent dpkg symlink size warnings
+	# Fix lstat to prevent symlink size warnings
 	set -- "-L" "$@"
 
 	# Core file systems that should always be present.
@@ -2013,58 +1870,56 @@ command_login() {
 	set -- "--bind=/proc" "$@"
 	set -- "--bind=/sys" "$@"
 
-	if [ "${dist_type-normal}" != "termux" ]; then
-		set -- "--bind=/dev/urandom:/dev/random" "$@"
-		set -- "--bind=/proc/self/fd:/dev/fd" "$@"
+	set -- "--bind=/dev/urandom:/dev/random" "$@"
+	set -- "--bind=/proc/self/fd:/dev/fd" "$@"
 
-		# Bind /proc/self/fd/{0,1,2} only if not launched under pipe
-		local i fds
-		fds=(stdin stdout stderr)
-		for i in "${!fds[@]}"; do
-			realpath -qe "/proc/self/fd/$i" >/dev/null && set -- "--bind=/proc/self/fd/$i:/dev/${fds[i]}" "$@"
-		done
-		unset i fds
+	# Bind /proc/self/fd/{0,1,2} only if not launched under pipe
+	local i fds
+	fds=(stdin stdout stderr)
+	for i in "${!fds[@]}"; do
+		realpath -qe "/proc/self/fd/$i" >/dev/null && set -- "--bind=/proc/self/fd/$i:/dev/${fds[i]}" "$@"
+	done
+	unset i fds
 
-		# Ensure that we can bind fake /proc and /sys entries.
-		setup_fake_sysdata
+	# Ensure that we can bind fake /proc and /sys entries.
+	setup_fake_sysdata
 
-		# With this tools should assume that no SELinux present.
-		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/sys/.empty:/sys/fs/selinux" "$@"
+	# With this tools should assume that no SELinux present.
+	set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/sys/.empty:/sys/fs/selinux" "$@"
 
-		# Fake various /proc entries commonly used by programs unless read access
-		# available.
-		if ! cat /proc/loadavg > /dev/null 2>&1; then
-			set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.loadavg:/proc/loadavg" "$@"
-		fi
-		if ! cat /proc/stat > /dev/null 2>&1; then
-			set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.stat:/proc/stat" "$@"
-		fi
-		if ! cat /proc/uptime > /dev/null 2>&1; then
-			set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.uptime:/proc/uptime" "$@"
-		fi
-		if ! cat /proc/version > /dev/null 2>&1; then
-			set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.version:/proc/version" "$@"
-		fi
-		if ! cat /proc/vmstat > /dev/null 2>&1; then
-			set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.vmstat:/proc/vmstat" "$@"
-		fi
-		if ! cat /proc/sys/kernel/cap_last_cap > /dev/null 2>&1; then
-			set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap" "$@"
-		fi
-		if ! cat /proc/sys/fs/inotify/max_user_watches > /dev/null 2>&1; then
-			set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches" "$@"
-		fi
-
-		# Bind /tmp to /dev/shm.
-		if [ ! -d "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp" ]; then
-			mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp"
-			chmod 1777 "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp"
-		fi
-		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp:/dev/shm" "$@"
+	# Fake various /proc entries commonly used by programs unless read access
+	# available.
+	if ! cat /proc/loadavg > /dev/null 2>&1; then
+		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.loadavg:/proc/loadavg" "$@"
+	fi
+	if ! cat /proc/stat > /dev/null 2>&1; then
+		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.stat:/proc/stat" "$@"
+	fi
+	if ! cat /proc/uptime > /dev/null 2>&1; then
+		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.uptime:/proc/uptime" "$@"
+	fi
+	if ! cat /proc/version > /dev/null 2>&1; then
+		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.version:/proc/version" "$@"
+	fi
+	if ! cat /proc/vmstat > /dev/null 2>&1; then
+		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.vmstat:/proc/vmstat" "$@"
+	fi
+	if ! cat /proc/sys/kernel/cap_last_cap > /dev/null 2>&1; then
+		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap" "$@"
+	fi
+	if ! cat /proc/sys/fs/inotify/max_user_watches > /dev/null 2>&1; then
+		set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches" "$@"
 	fi
 
+	# Bind /tmp to /dev/shm.
+	if [ ! -d "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp" ]; then
+		mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp"
+		chmod 1777 "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp"
+	fi
+	set -- "--bind=${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp:/dev/shm" "$@"
+
 	# When running in non-isolated mode, provide some bindings specific
-	# to Android and Termux so user can interact with host file system.
+	# to Android so user can interact with host file system.
 	if ! $isolated_environment; then
 		for data_dir in /data/app /data/dalvik-cache \
 			/data/misc/apexdata/com.android.art/dalvik-cache; do
@@ -2081,14 +1936,8 @@ command_login() {
 			set -- "--bind=/data/data/${APP_PACKAGE}/files/apps" "$@"
 		fi
 
-		# These bindings not available by default when running Termux distro.
-		if [ "${dist_type-normal}" != "termux" ]; then
-			set -- "--bind=/data/data/${APP_PACKAGE}/cache" "$@"
-			set -- "--bind=${APP_HOME}" "$@"
-		else
-			# For package manager in 'termux' distribution.
-			mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/cache"
-		fi
+		set -- "--bind=/data/data/${APP_PACKAGE}/cache" "$@"
+		set -- "--bind=${APP_HOME}" "$@"
 
 		# Bind whole /storage directory when it is readable. This gives
 		# access to shared storage and on some Android versions to external
@@ -2123,8 +1972,7 @@ command_login() {
 	fi
 
 	# When using QEMU, we need some host files even in isolated mode.
-	# Force enabled for Termux distribution.
-	if ! $isolated_environment || [ "${dist_type-normal}" = "termux" ] || $need_cpu_emulator; then
+	if ! $isolated_environment || $need_cpu_emulator; then
 		local system_mnt
 		for system_mnt in /apex /odm /product /system /system_ext /vendor \
 			/linkerconfig/ld.config.txt \
@@ -2152,41 +2000,7 @@ command_login() {
 			fi
 		done
 
-		# App prefix can be bound only for non-Termux distributions.
-		if [ "${dist_type-normal}" != "termux" ]; then
-			set -- "--bind=${APP_PREFIX}" "$@"
-		fi
-	fi
-
-	# Use app home directory if requested.
-	# Ignores --isolated.
-	if $use_termux_home; then
-		if [ "${dist_type-normal}" = "termux" ]; then
-			set -- "--bind=${APP_HOME}:${APP_HOME}" "$@"
-		else
-			if [ "$login_user" = "root" ]; then
-				set -- "--bind=${APP_HOME}:/root" "$@"
-			else
-				if [ -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" ]; then
-					local user_home
-					user_home=$(grep -P "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d: -f 6)
-
-					if [ -z "$user_home" ]; then
-						user_home="/home/${login_user}"
-					fi
-
-					set -- "--bind=${APP_HOME}:${user_home}" "$@"
-				else
-					set -- "--bind=${APP_HOME}:/home/${login_user}" "$@"
-				fi
-			fi
-		fi
-	fi
-
-	# Bind the tmp folder from the host system to the guest system
-	# Ignores --isolated.
-	if $make_host_tmp_shared; then
-		set -- "--bind=${APP_PREFIX}/tmp:/tmp" "$@"
+		set -- "--bind=${APP_PREFIX}" "$@"
 	fi
 
 	# Bind custom file systems.
@@ -2199,9 +2013,6 @@ command_login() {
 	if $fix_low_ports; then
 		set -- "-p" "$@"
 	fi
-
-	# Prevent possible conflicts with proot.
-	unset LD_PRELOAD
 
 	exec proot "$@"
 }
@@ -2221,7 +2032,6 @@ command_login_help() {
 	msg "  ${GREEN}--help               ${CYAN}- Show this help information.${RST}"
 	msg
 	msg "  ${GREEN}--user [user]        ${CYAN}- Login as specified user instead of 'root'.${RST}"
-	msg "                         ${CYAN}Not applicable for distribution 'termux'.${RST}"
 	msg
 	msg "  ${GREEN}--fix-low-ports      ${CYAN}- Modify bindings to protected ports to use${RST}"
 	msg "                         ${CYAN}a higher port number.${RST}"
@@ -2229,20 +2039,13 @@ command_login_help() {
 	msg "  ${GREEN}--isolated           ${CYAN}- Run isolated environment without access${RST}"
 	msg "                         ${CYAN}to host file system.${RST}"
 	msg
-	msg "  ${GREEN}--termux-home        ${CYAN}- Mount Termux home directory to /root.${RST}"
-	msg "                         ${CYAN}Takes priority over '${GREEN}--isolated${CYAN}' option.${RST}"
-	msg
-	msg "  ${GREEN}--shared-tmp         ${CYAN}- Mount Termux temp directory to /tmp.${RST}"
-	msg "                         ${CYAN}Takes priority over '${GREEN}--isolated${CYAN}' option.${RST}"
-	msg
 	msg "  ${GREEN}--bind [path:path]   ${CYAN}- Custom file system binding. Can be specified${RST}"
 	msg "                         ${CYAN}multiple times.${RST}"
 	msg "                         ${CYAN}Takes priority over '${GREEN}--isolated${CYAN}' option.${RST}"
 	msg
 	msg "  ${GREEN}--no-link2symlink    ${CYAN}- Disable hardlink emulation by proot.${RST}"
 	msg "                         ${CYAN}Adviseable only on devices with SELinux${RST}"
-	msg "                         ${CYAN}in permissive mode. Not applicable for${RST}"
-	msg "                         ${CYAN}distribution 'termux'.${RST}"
+	msg "                         ${CYAN}in permissive mode.${RST}"
 	msg
 	msg "  ${GREEN}--no-sysvipc         ${CYAN}- Disable System V IPC emulation by proot.${RST}"
 	msg
@@ -2277,12 +2080,11 @@ command_login_help() {
 	msg "  ${CYAN}* ${YELLOW}/system${RST}"
 	msg "  ${CYAN}* ${YELLOW}/vendor${RST}"
 	msg
-	msg "${CYAN}This should be enough to get Termux utilities like termux-api or${RST}"
-	msg "${CYAN}termux-open get working. If they do not work for some reason,${RST}"
-	msg "${CYAN}make sure they are properly set in ${YELLOW}/etc/environment${CYAN}.${RST}"
+	msg "${CYAN}If you experience issues with environment variables, make sure${RST}"
+	msg "${CYAN}they are properly set in ${YELLOW}/etc/environment${CYAN}.${RST}"
 	msg "${CYAN}Also check whether they define variables like ANDROID_DATA,${RST}"
 	msg "${CYAN}ANDROID_ROOT, BOOTCLASSPATH and others which are usually set${RST}"
-	msg "${CYAN}in Termux sessions.${RST}"
+	msg "${CYAN}in Android sessions.${RST}"
 	msg
 	msg "${CYAN}If issue occurs only after su/sudo use, then likely your PAM${RST}"
 	msg "${CYAN}configuration doesn't load ${YELLOW}/etc/environment${CYAN} and you need to fix${RST}"
@@ -2294,9 +2096,6 @@ command_login_help() {
 	msg
 	msg "${CYAN}You need to append it to ${YELLOW}/etc/pam.d/su${CYAN}, ${YELLOW}/etc/pam.d/sudo${CYAN} or other${RST}"
 	msg "${CYAN}file depending on distribution.${RST}"
-	msg
-	msg "${CYAN}When using distribution 'termux' some of mentioned directories${RST}"
-	msg "${CYAN}such as /system are always mounted to satisfy requirements.${RST}"
 	msg
 	msg "${CYAN}Selected distribution should be referenced by alias which can be${RST}"
 	msg "${CYAN}obtained by this command: ${GREEN}${PROGRAM_NAME} list${RST}"
@@ -2497,13 +2296,6 @@ command_backup() {
 		return 1
 	fi
 
-	# Notify user if tar available in PATH is not GNU tar.
-	if ! grep -q 'tar (GNU tar)' <(tar --version 2>/dev/null | head -n 1); then
-		msg
-		msg "${BRED}Warning: tar binary that is available in PATH appears to be not a GNU tar. You may experience issues during installation, backup and restore operations.${RST}"
-		msg
-	fi
-
 	msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Backing up ${YELLOW}${SUPPORTED_DISTRIBUTIONS["$distro_name"]}${CYAN}...${RST}"
 
 	if [ -z "${tarball_file_path-}" ]; then
@@ -2668,13 +2460,6 @@ command_restore() {
 			command_restore_help
 			return 1
 		fi
-	fi
-
-	# Notify user if tar available in PATH is not GNU tar.
-	if ! grep -q 'tar (GNU tar)' <(tar --version 2>/dev/null | head -n 1); then
-		msg
-		msg "${BRED}Warning: tar binary that is available in PATH appears to be not a GNU tar. You may experience issues during installation, backup and restore operations.${RST}"
-		msg
 	fi
 
 	local success
@@ -3071,7 +2856,7 @@ command_help() {
 #############################################################################
 
 show_version() {
-	msg "${ICYAN}Proot-Distro v${PROGRAM_VERSION} by Termux (@sylirre).${RST}"
+	msg "${ICYAN}Proot-Distro v${PROGRAM_VERSION} (ported from Termux).${RST}"
 }
 
 #############################################################################
@@ -3097,20 +2882,14 @@ esac
 DISTRO_ARCH=${DISTRO_ARCH:-}
 if [ -z "$DISTRO_ARCH" ]; then DISTRO_ARCH="${DEVICE_CPU_ARCH}"; fi
 
-# Verify architecture if possible - avoid running under linux32 or similar.
-if [ -x "${APP_PREFIX}/bin/dpkg" ]; then
-	if [ "$DEVICE_CPU_ARCH" != "$("${APP_PREFIX}"/bin/dpkg --print-architecture)" ]; then
-		msg
-		msg "${BRED}Error: the CPU architecture reported by system does not match the architecture of Termux packages. Do not attempt to hijack system properties by using 'linux32' or similar utilities.${RST}"
-		msg
-		exit 1
-	fi
-fi
-
 # Check if architecture supports 32-bit instructions.
 SUPPORT_32BIT=true
-if grep -q "CPU op-mode" <(lscpu) 2>/dev/null && ! grep -qE 'CPU op-mode\(s\):.*32-bit' <(lscpu) 2>/dev/null; then
-	SUPPORT_32BIT=false
+if [ -f /proc/cpuinfo ]; then
+	if ! grep -qE ' CPU op-mode.*32-bit' /proc/cpuinfo 2>/dev/null; then
+		if grep -qE ' CPU op-mode' /proc/cpuinfo 2>/dev/null; then
+			SUPPORT_32BIT=false
+		fi
+	fi
 fi
 
 declare -A TARBALL_URL TARBALL_SHA256
