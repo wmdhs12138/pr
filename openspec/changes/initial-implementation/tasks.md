@@ -112,10 +112,15 @@
   - All `!= "termux"` guards simplified (always true, removed condition)
   - Syntax verified: bash -n passes
 
-- [ ] **T2.4** Adapt download mechanism
-  - Replace `curl -Lo` with `busybox wget -O`
-  - Add retry logic around wget (3 retries, 10s timeout)
-  - Verify SHA-256 with busybox sha256sum
+- [x] **T2.4** Adapt download mechanism
+  - Created `download_file()` helper function with retry + fallback
+  - Tries curl first (if available), falls back to wget (busybox)
+  - Retry: 3 attempts with exponential backoff (5s, 10s, 20s, max 60s)
+  - curl: --disable --fail --location --connect-timeout 15 --max-time 600
+  - wget: -T 30 -q (busybox compatible)
+  - Validates downloaded file exists and is non-empty
+  - Removed .tmp rename pattern (download_file writes directly, cleans up on failure)
+  - SHA-256 verification unchanged (sha256sum works in busybox)
 
 - [ ] **T2.5** Adapt dependency check
   - Remove `unzip`, `lscpu`, `curl` from required list

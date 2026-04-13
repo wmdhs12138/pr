@@ -207,7 +207,58 @@ detect_cpu_arch() {
 
 #############################################################################
 #
-# FUNCTION TO INSTALL THE SPECIFIED DISTRIBUTION
+# FUNCTION TO DOWNLOAD FILES WITH RETRY AND FALLBACK
+#
+# Tries curl first (if available), then falls back to wget.
+# Implements retry logic with exponential backoff.
+#
+# Usage: download_file <url> <output_path> [max_retries]
+#
+#############################################################################
+
+download_file() {
+	local url="$1"
+	local output_path="$2"
+	local max_retries="${3:-3}"
+	local retry=0
+	local delay=5
+
+	while [ $retry -lt "$max_retries" ]; do
+		if [ $retry -gt 0 ]; then
+			msg "${BLUE}[${YELLOW}*${BLUE}] ${CYAN}Retry $retry/$max_retries after ${delay}s...${RST}"
+			sleep "$delay"
+			delay=$((delay * 2))
+			[ "$delay" -gt 60 ] && delay=60
+		fi
+
+		rm -f "$output_path"
+
+		if command -v curl >/dev/null 2>&1; then
+			if curl --disable --fail --retry 0 --location \
+				--connect-timeout 15 --max-time 600 \
+				--output "$output_path" "$url" 2>&1; then
+				[ -f "$output_path" ] && [ -s "$output_path" ] && return 0
+			fi
+		elif command -v wget >/dev/null 2>&1; then
+			if wget -T 30 -q -O "$output_path" "$url" 2>&1; then
+				[ -f "$output_path" ] && [ -s "$output_path" ] && return 0
+			fi
+		else
+			msg "${BRED}Error: neither curl nor wget is available.${RST}"
+			rm -f "$output_path"
+			return 1
+		fi
+
+		retry=$((retry + 1))
+	done
+
+	rm -f "$output_path"
+	return 1
+}
+
+#############################################################################
+#
+# FUNCTION TO HANDLE THE 'INSTALL' COMMAND
 #
 # Brief algorithm how it works:
 #
@@ -437,23 +488,15 @@ command_install() {
 		if [ ! -f "${DOWNLOAD_CACHE_DIR}/${archive_name}" ]; then
 			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Downloading rootfs archive...${RST}"
 			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}URL: ${TARBALL_URL["$DISTRO_ARCH"]}${RST}"
-
-			# Using temporary file as script can't distinguish the partially
-			# downloaded file from the complete. Useful in case if curl will
-			# fail for some reason.
 			msg
-			rm -f "${DOWNLOAD_CACHE_DIR}/${archive_name}.tmp"
-			if ! curl --disable --fail --retry 5 --retry-connrefused --retry-delay 5 --location \
-				--output "${DOWNLOAD_CACHE_DIR}/${archive_name}.tmp" "${TARBALL_URL["$DISTRO_ARCH"]}"; then
+
+			if ! download_file "${TARBALL_URL["$DISTRO_ARCH"]}" "${DOWNLOAD_CACHE_DIR}/${archive_name}" 3; then
 				msg
 				msg "${BLUE}[${RED}!${BLUE}] ${CYAN}Download failure, please check your network connection.${RST}"
-				rm -f "${DOWNLOAD_CACHE_DIR}/${archive_name}.tmp"
+				rm -f "${DOWNLOAD_CACHE_DIR}/${archive_name}"
 				return 1
 			fi
 			msg
-
-			# If curl finished successfully, rename file to original.
-			mv -f "${DOWNLOAD_CACHE_DIR}/${archive_name}.tmp" "${DOWNLOAD_CACHE_DIR}/${archive_name}"
 		else
 			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Using cached rootfs archive...${RST}"
 		fi
