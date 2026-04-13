@@ -349,14 +349,14 @@ command_install() {
 						return 1
 					fi
 
-					if ! grep -qP '^[a-z0-9][a-z0-9_.+\-]*$' <<< "$1"; then
+					if ! grep -qE '^[a-z0-9][a-z0-9_.+\-]*$' <<< "$1"; then
 						msg
 						msg "${BRED}Error: argument to option '${YELLOW}--override-alias${BRED}' should start only with an alphanumeric character and consist of alphanumeric characters including symbols '_.+-'."
 						msg
 						return 1
 					fi
 
-					if grep -qP '^.*\.sh$' <<< "$1"; then
+					if grep -qE '^.*\.sh$' <<< "$1"; then
 						msg
 						msg "${BRED}Error: argument to option '${YELLOW}--override-alias${BRED}' should not end with '.sh'.${RST}"
 						msg
@@ -518,7 +518,7 @@ command_install() {
 		fi
 		# But SHA-256 should be ignored for custom URLs if another SHA-256 is not given.
 		if [ -z "${PD_OVERRIDE_TARBALL_URL-}" ] && [ -n "${PD_OVERRIDE_TARBALL_SHA256-}" ]; then
-			if ! grep -qP '^[0-9a-fA-F]{64}$' <<< "${TARBALL_SHA256["$DISTRO_ARCH"]}"; then
+			if ! grep -qE '^[0-9a-fA-F]{64}$' <<< "${TARBALL_SHA256["$DISTRO_ARCH"]}"; then
 				msg
 				msg "${BRED}Error: got malformed SHA-256 from plug-in script '${distro_plugin_script}'.${RST}"
 				msg
@@ -566,9 +566,9 @@ command_install() {
 		#                             to avoid issues with Arch Linux bootstrap archives.
 		set +e
 		proot --link2symlink \
-			tar -C "${INSTALLED_ROOTFS_DIR}/${distro_name}" --warning=no-unknown-keyword \
-			--delay-directory-restore --preserve-permissions --strip="${TARBALL_STRIP_OPT}" \
-			-xf "${DOWNLOAD_CACHE_DIR}/${archive_name}" --exclude='dev' |& grep -v "/linkerconfig/" >&2
+			tar -C "${INSTALLED_ROOTFS_DIR}/${distro_name}" \
+			--strip="${TARBALL_STRIP_OPT}" \
+			-xf "${DOWNLOAD_CACHE_DIR}/${archive_name}" --exclude='dev' 2>&1 | grep -v "/linkerconfig/" >&2
 		set -e
 
 		# If no /etc in rootfs, terminate installation.
@@ -650,15 +650,20 @@ command_install() {
 			"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd"
 		echo "aid_$(id -un):*:18446:0:99999:7:::" >> \
 			"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/shadow"
-		local group_name group_id
-		while read -r group_name group_id; do
+		local __group_names __group_ids
+		read -ra __group_names <<< "$(id -Gn)"
+		read -ra __group_ids <<< "$(id -G)"
+		for ((i=0; i<${#__group_names[@]}; i++)); do
+			local group_name="${__group_names[$i]}"
+			local group_id="${__group_ids[$i]}"
 			echo "aid_${group_name}:x:${group_id}:root,aid_$(id -un)" \
 				>> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/group"
 			if [ -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow" ]; then
 				echo "aid_${group_name}:*::root,aid_$(id -un)" \
 					>> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow"
 			fi
-		done < <(paste <(id -Gn | tr ' ' '\n') <(id -G | tr ' ' '\n'))
+		done
+		unset __group_names __group_ids
 
 		# Ensure that proot will be able to bind fake /proc and /sys entries.
 		setup_fake_sysdata
@@ -1309,14 +1314,14 @@ command_rename() {
 
 	# Put a restriction on characters in distribution name.
 	# Same as for --override-alias option of command_install().
-	if ! grep -qP '^[a-z0-9][a-z0-9_.+\-]*$' <<< "${new_distro_name}"; then
+	if ! grep -qE '^[a-z0-9][a-z0-9_.+\-]*$' <<< "${new_distro_name}"; then
 		msg
 		msg "${BRED}Error: the new alias of distribution should start only with an alphanumeric character and consist of alphanumeric characters including symbols '_.+-'.${RST}"
 		command_rename_help
 		return 1
 	fi
 
-	if grep -qP '^.*\.sh$' <<< "${new_distro_name}"; then
+	if grep -qE '^.*\.sh$' <<< "${new_distro_name}"; then
 		msg
 		msg "${BRED}Error: the new alias of distribution should not end with '.sh'.${RST}"
 		msg
@@ -1822,7 +1827,7 @@ command_login() {
 	# Handle /etc/environment.
 	if [ -e "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" ]; then
 		mapfile -t -O "${#login_env_vars[@]}" login_env_vars < <(
-			grep -P '^[A-Za-z_][A-Za-z0-9_]+=.+' "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" | \
+			grep -E '^[A-Za-z_][A-Za-z0-9_]+=.+' "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" | \
 				sed -E \
 					-e "s/^([^=]+=)['\"]/\1/g" \
 					-e "s/['\"]\$//g" \
@@ -1964,7 +1969,7 @@ command_login() {
 	local i fds
 	fds=(stdin stdout stderr)
 	for i in "${!fds[@]}"; do
-		realpath -qe "/proc/self/fd/$i" >/dev/null && set -- "--bind=/proc/self/fd/$i:/dev/${fds[i]}" "$@"
+		realpath -e "/proc/self/fd/$i" >/dev/null 2>&1 && set -- "--bind=/proc/self/fd/$i:/dev/${fds[i]}" "$@"
 	done
 	unset i fds
 
@@ -2012,7 +2017,7 @@ command_login() {
 			/data/misc/apexdata/com.android.art/dalvik-cache; do
 			[ ! -d "$data_dir" ] && continue
 			local dir_mode
-			dir_mode=$(stat --format='%a' "$data_dir")
+			dir_mode=$(stat -c '%a' "$data_dir")
 			if [[ ${dir_mode:2} =~ ^[157]$ ]]; then
 				set -- "--bind=${data_dir}" "$@"
 			fi
@@ -2074,7 +2079,7 @@ command_login() {
 
 			if [ -d "$system_mnt" ]; then
 				local dir_mode
-				dir_mode=$(stat --format='%a' "$system_mnt")
+				dir_mode=$(stat -c '%a' "$system_mnt")
 				if [[ ${dir_mode:2} =~ ^[157]$ ]]; then
 					set -- "--bind=${system_mnt}" "$@"
 				fi
@@ -2748,11 +2753,11 @@ command_copy() {
 	fi
 
 	# Evaluate source path.
-	src_distribution=$(grep -qP ':' <<< "${source}" && cut -d':' -f1 <<< "${source}" || true)
+	src_distribution=$(grep -qE ':' <<< "${source}" && cut -d':' -f1 <<< "${source}" || true)
 	src_path=$(cut -d':' -f2- <<< "${source}")
 	if [ -n "${src_distribution}" ]; then
 		if [ -d "${INSTALLED_ROOTFS_DIR}/${src_distribution}" ]; then
-			src_path=$(realpath -m "${INSTALLED_ROOTFS_DIR}/${src_distribution}/${src_path}")
+			src_path=$(realpath "${INSTALLED_ROOTFS_DIR}/${src_distribution}/${src_path}")
 		else
 			msg
 			msg "${BRED}Error: distribution '${YELLOW}${src_distribution}${BRED}' is not installed.${RST}"
@@ -2760,7 +2765,7 @@ command_copy() {
 			return 1
 		fi
 	else
-		src_path=$(realpath -m "${src_path}")
+		src_path=$(realpath "${src_path}")
 	fi
 	if [ ! -e "${src_path}" ]; then
 		msg
@@ -2770,11 +2775,11 @@ command_copy() {
 	fi
 
 	# Evaluate destination path.
-	dest_distribution=$(grep -qP ':' <<< "${destination}" && cut -d':' -f1 <<< "${destination}" || true)
+	dest_distribution=$(grep -qE ':' <<< "${destination}" && cut -d':' -f1 <<< "${destination}" || true)
 	dest_path=$(cut -d':' -f2- <<< "${destination}")
 	if [ -n "${dest_distribution}" ]; then
 		if [ -d "${INSTALLED_ROOTFS_DIR}/${dest_distribution}" ]; then
-			dest_path=$(realpath -m "${INSTALLED_ROOTFS_DIR}/${dest_distribution}/${dest_path}")
+			dest_path=$(realpath "${INSTALLED_ROOTFS_DIR}/${dest_distribution}/${dest_path}")
 		else
 			msg
 			msg "${BRED}Error: distribution '${YELLOW}${dest_distribution}${BRED}' is not installed.${RST}"
@@ -2782,7 +2787,7 @@ command_copy() {
 			return 1
 		fi
 	else
-		dest_path=$(realpath -m "${dest_path}")
+		dest_path=$(realpath "${dest_path}")
 	fi
 	#if [ -e "${dest_path}" ]; then
 	#	msg
