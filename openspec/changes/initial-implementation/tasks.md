@@ -330,81 +330,97 @@
   - Verify /sdcard, /system, /vendor are NOT accessible
   - Verify /usr, /bin, /etc are accessible
 
-## Phase 6 — Port proot-distro.sh to mksh (POSIX sh)
+## Phase 6 — Replace proot-distro.sh with Rust Binary (pr-cli)
 
-Android's `untrusted_app` SELinux domain blocks `execve()` of binaries in
-app-writable directories. The app process can only exec `/system/bin/sh` (mksh
-R59 2020/10/31). Bash in nativeLibraryDir works from `run-as` (which uses
-`runas_app` context) but is killed with SIGSYS (exit 159) when exec'd from the
-app process via ProcessBuilder.
+Viability confirmed (see `docs/bash-to-rust.md`): a statically-linked Rust binary
+in nativeLibraryDir can be exec'd from the app process (`untrusted_app` SELinux).
+Rust can fork+exec subcommands (busybox, /system/bin/sh, proot, bash), perform file
+I/O, read env vars, and parse plugin configs. 639KB for the test binary.
 
-**Goal:** Make proot-distro.sh fully compatible with mksh R59 so it can be
-invoked as `/system/bin/sh proot-distro.sh ...` from the app process.
+**Why Rust instead of mksh port:** The mksh port requires replacing all associative
+arrays with `eval`-based flat-variable hacks across 3000+ lines of shell — fragile,
+hard to test, hard to maintain. Rust gives us type safety, testability, and avoids
+the entire shell compatibility problem. Additionally, Rust can exec bash as a
+subprocess (exit=0) while Java ProcessBuilder cannot (SIGSYS 159) — Rust acts as
+a trusted intermediary.
 
-**Key mksh R59 limitations discovered:**
-- No `typeset -A` / `declare -A` (associative arrays) — silently corrupts data
-- No `mapfile` / `readarray`
-- No process substitution `< <(...)`
-- No `${!var}` indirect expansion
-- No `[[ =~ ]]` regex match
-- No `local -a` (use plain `local`)
-- Here-docs with command substitution need writable `TMPDIR`
-- Plugin array keys must NOT be quoted: `x[aarch64]` OK, `x['aarch64']` NOT OK
-- mksh parses the ENTIRE script before executing — bash-isms in `command_login()`
-  break `command_install()` too
+**Binary:** `src/pr-cli/` — statically linked for `aarch64-linux-android`, bundled as
+`jniLibs/arm64-v8a/libpr-cli.so`, symlinked to `files/usr/bin/pr-cli`.
+Cross-compiled via NDK 27 clang + `cargo build --target aarch64-linux-android`.
 
-- [ ] **T6.1** Replace associative arrays with flat variables
-  - Plugins already use flat naming: `TARBALL_URL_aarch64="..."` (done)
-  - Add helper functions for key-value access via `eval`:
-    ```
-    _get_distro_name()  — eval-based lookup of SUPPORTED_DISTRIBUTIONS__<alias>
-    _has_distro()       — existence check via eval
-    _get_tarball_url()  — eval-based lookup of TARBALL_URL_<arch>
-    _get_tarball_sha256() — eval-based lookup of TARBALL_SHA256_<arch>
-    _set_tarball_url()  — eval-based assignment
-    _set_tarball_sha256() — eval-based assignment
-    ```
-  - Track distro key list in `_DISTRO_KEYS` string variable
-  - Replace ALL `${SUPPORTED_DISTRIBUTIONS[$var]}` with helper calls
-  - Replace ALL `${TARBALL_URL[$DISTRO_ARCH]}` with helper calls
-  - Replace ALL `${TARBALL_SHA256[$DISTRO_ARCH]}` with helper calls
-  - Replace ALL `[ -z "${SUPPORTED_DISTRIBUTIONS[$var]+x}" ]` with `_has_distro`
+### T6.1 — Rust project scaffolding
 
-- [ ] **T6.2** Fix remaining mksh incompatibilities in proot-distro.sh
-  - `${!var}` indirect expansion → `eval "_val=\${$var}"` (done for 3 blocks)
-  - `mapfile` in command_login() → temp file + while-read loop (done)
-  - `< <(...)` process substitution → pipeline or for-glob (done for 3 sites)
-  - `[[ =~ ]]` regex → `case` statement (done for 2 sites)
-  - `local -a` → `local` (done for 2 sites)
-  - `declare -f -F` → `type funcname >/dev/null 2>&1`
-  - `${!SUPPORTED_DISTRIBUTIONS[*]}` → check `$_DISTRO_KEYS`
-  - `${!SUPPORTED_DISTRIBUTIONS[@]}` iteration → iterate `$_DISTRO_KEYS`
-  - `${!TARBALL_URL[@]}` in sourced plugins → grep plugin file for patterns
+- [ ] Create `src/pr-cli/` Cargo project with cross-compilation config
+- [ ] `.cargo/config.toml` with NDK 27 linker and static link flags
+- [ ] `Cargo.toml` with dependencies: `clap` (CLI), `sha2` (SHA256), `libc`
+- [ ] `build-pr-cli.sh` script: build, strip, copy to jniLibs
+- [ ] Add `libpr-cli.so` symlink to `App.kt` ensureNativeLibSymlinks()
+- [ ] Bump `BOOTSTRAP_VERSION`
 
-- [ ] **T6.3** Update plugin loading for flat variables
-  - Plugin sourcing must handle `TARBALL_URL_aarch64="..."` (already done)
-  - Remove `declare -A` from plugin loading section
-  - Ensure sourced plugins' flat variables are accessible in parent scope
+### T6.2 — Plugin config parser
 
-- [ ] **T6.4** Test proot-distro.sh under mksh R59 on device
-  - Verify `proot-distro list` shows correct distro names and architectures
-  - Verify `proot-distro install alpine` completes (download + extract)
-  - Verify `proot-distro login alpine` enters shell
-  - Verify `proot-distro remove alpine` cleans up
-  - Test via `run-as id.or.oo.pr /system/bin/sh proot-distro.sh ...`
+- [ ] Parse key=value format from `.sh` plugin files
+- [ ] Handle both formats: `TARBALL_URL_aarch64="..."` (flat) and `TARBALL_URL['aarch64']="..."` (legacy)
+- [ ] Extract `DISTRO_NAME`, `DISTRO_COMMENT`, `TARBALL_URL_<arch>`, `TARBALL_SHA256_<arch>`
+- [ ] Handle `distro_setup()` detection (present/absent in plugin)
+- [ ] Unit tests with all 14 real plugins as test fixtures
 
-- [ ] **T6.5** Test install from app UI via ProcessBuilder
-  - ProcessBuilder runs `/system/bin/sh proot-distro.sh install alpine`
-  - Verify no SIGSYS / exit code 159
-  - Verify download succeeds (app has network access)
-  - Verify extraction completes
-  - Verify Alpine appears as "Installed" in UI
+### T6.3 — CLI interface and `command_list`
 
-- [ ] **T6.6** Test login from app UI
-  - ProotLauncher starts PTY session
-  - Verify proot runs without seccomp SIGSYS (patched binary)
-  - Verify interactive shell works
-  - Verify `apk update && apk add vim` works inside Alpine
+- [ ] Subcommands: `install`, `login`, `remove`, `list`, `backup`, `restore`, `rename`, `reset`, `copy`, `clear-cache`
+- [ ] `pr-cli list` — iterate plugins, display distro name, comment, supported architectures
+- [ ] Colored output (match proot-distro.sh format for familiarity)
+- [ ] `--help` and `--version` flags
+
+### T6.4 — `command_install`
+
+- [ ] Argument parsing: `--override-alias`, `--override-tarbll-url`, `--override-tarball-sha256`
+- [ ] Download tarball via busybox wget subprocess (with retry, 3 attempts)
+- [ ] SHA256 verification via busybox sha256sum subprocess
+- [ ] Extract tarball via busybox tar subprocess (`--link2symlink` wrapper if needed)
+- [ ] Write config files: `/etc/passwd`, `/etc/group`, `/etc/resolv.conf`, `/etc/environment`
+- [ ] Generate fake `/proc` data (port `setup_fake_sysdata()` from shell)
+- [ ] Handle `--override-alias` (copy plugin, rewrite DISTRO_NAME)
+- [ ] Call `distro_setup()` via proot if plugin has one
+
+### T6.5 — `command_login`
+
+- [ ] Argument parsing: `--user`, `--isolated`, `--shared-tmp`, `--no-link2symlink`, `--no-sysvipc`, `--custom-bind`, `--cpu-emulator`
+- [ ] Build proot command line: bind mounts, env vars, kernel version fake, symlinks
+- [ ] Detect bind-mountable system dirs via `stat -c '%a'` (port the `case "${mode:2}"` logic)
+- [ ] Handle CPU emulation (qemu args for cross-arch)
+- [ ] Write `/etc/environment` with current Android env vars
+- [ ] `exec` proot (replace Rust process — no subshell)
+
+### T6.6 — `command_remove`, `command_reset`, `command_clear-cache`
+
+- [ ] `remove` — delete rootfs directory, clean up symlinks
+- [ ] `reset` — remove + re-install (call install flow)
+- [ ] `clear-cache` — delete download cache entries
+
+### T6.7 — `command_backup`, `command_restore`, `command_rename`, `command_copy`
+
+- [ ] `backup` — tar the rootfs into a backup archive
+- [ ] `restore` — extract backup archive to rootfs
+- [ ] `rename` — rename distro alias, update plugin symlink
+- [ ] `copy` — copy rootfs from one distro to another
+
+### T6.8 — APK integration and end-to-end testing
+
+- [ ] Update `MainActivity.kt` ProcessBuilder to invoke `pr-cli install alpine` instead of `/system/bin/sh proot-distro.sh`
+- [ ] Update `ProotLauncher.kt` to invoke `pr-cli login alpine`
+- [ ] Integration test: install Alpine from app UI
+- [ ] Integration test: login to Alpine from app UI
+- [ ] Integration test: install Debian, run `apt update`
+- [ ] Integration test: backup/restore Alpine
+- [ ] Verify APK size delta (pr-cli binary vs shell script)
+
+### T6.9 — Cleanup
+
+- [ ] Remove `proot-distro.sh` from assets (replaced by pr-cli)
+- [ ] Remove bash binary from jniLibs (no longer needed as script interpreter)
+- [ ] Keep `bootstrap.sh` (still needed for initial directory setup + busybox applet symlinks)
+- [ ] Update `docs/bash-to-rust.md` with final results
 
 ## Phase 7 — Polish & Documentation
 
@@ -435,3 +451,37 @@ invoked as `/system/bin/sh proot-distro.sh ...` from the app process.
   - Configure release build type
   - Create first release APK
   - Push to github.com/oonid/pr releases
+
+## Phase 8 — mksh Port of proot-distro.sh (Optional Alternative)
+
+This is the alternative to Phase 6's Rust approach. Only needed if we decide
+against Rust. The mksh port is fragile (eval-heavy associative array simulation)
+and harder to maintain, but avoids adding a Rust toolchain dependency.
+
+Android's `untrusted_app` SELinux domain blocks `execve()` of binaries in
+app-writable directories. The app process can only exec `/system/bin/sh` (mksh
+R59 2020/10/31). Bash in nativeLibraryDir works from `run-as` (which uses
+`runas_app` context) but is killed with SIGSYS (exit 159) when exec'd from the
+app process via ProcessBuilder.
+
+**Goal:** Make proot-distro.sh fully compatible with mksh R59 so it can be
+invoked as `/system/bin/sh proot-distro.sh ...` from the app process.
+
+**Key mksh R59 limitations discovered:**
+- No `typeset -A` / `declare -A` (associative arrays) — silently corrupts data
+- No `mapfile` / `readarray`
+- No process substitution `< <(...)`
+- No `${!var}` indirect expansion
+- No `[[ =~ ]]` regex match
+- No `local -a` (use plain `local`)
+- Here-docs with command substitution need writable `TMPDIR`
+- Plugin array keys must NOT be quoted: `x[aarch64]` OK, `x['aarch64']` NOT OK
+- mksh parses the ENTIRE script before executing — bash-isms in `command_login()`
+  break `command_install()` too
+
+- [ ] **T8.1** Replace associative arrays with flat variables and eval helpers
+- [ ] **T8.2** Fix remaining mksh incompatibilities in proot-distro.sh
+- [ ] **T8.3** Update plugin loading for flat variables
+- [ ] **T8.4** Test proot-distro.sh under mksh R59 on device
+- [ ] **T8.5** Test install from app UI via ProcessBuilder with `/system/bin/sh`
+- [ ] **T8.6** Test login from app UI
