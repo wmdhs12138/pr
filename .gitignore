@@ -17,4 +17,7 @@ local/
 android/.gradle/
 android/build/
 android/app/build/
+android/app/.cxx/
+android/termlib/build/
+android/termlib/.cxx/
 android/local.properties
