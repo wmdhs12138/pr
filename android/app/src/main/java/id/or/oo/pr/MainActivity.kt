@@ -12,6 +12,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.*
@@ -82,6 +84,43 @@ fun DistroListScreen(app: App) {
         topBar = {
             TopAppBar(
                 title = { Text("PR") },
+                actions = {
+                    if (showOutput) {
+                        IconButton(onClick = {
+                            showOutput = false
+                            outputLines = mutableListOf()
+                        }) {
+                            Icon(Icons.Default.Close, "Close")
+                        }
+                    } else {
+                        IconButton(onClick = {
+                            if (loadingDistro == null) {
+                                loadingDistro = "rust-test"
+                                showOutput = true
+                                outputLines = mutableListOf("Running Rust viability tests...")
+                                scope.launch {
+                                    val app = app
+                                    val binDir = File(app.prefixDir, "bin")
+                                    val prTest = File(binDir, "pr-test")
+                                    for (testName in listOf("selfcheck", "file-io", "exec-subcommand", "env-vars", "network", "parse-plugin", "proot")) {
+                                        withContext(Dispatchers.Main) {
+                                            outputLines = (outputLines + "--- $testName ---").toMutableList()
+                                        }
+                                        runDistroCommand(app, "pr-test $testName", overrideCmd = arrayOf(prTest.absolutePath, testName)) { line ->
+                                            outputLines = (outputLines + line).toMutableList()
+                                        }
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        outputLines = (outputLines + "--- done ---").toMutableList()
+                                        loadingDistro = null
+                                    }
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.BugReport, "Test Rust")
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                 )
@@ -258,9 +297,13 @@ private fun parsePluginName(pluginFile: File): String? {
     return null
 }
 
-private suspend fun runDistroCommand(app: App, command: String, onLine: (String) -> Unit) = withContext(Dispatchers.IO) {
+private suspend fun runDistroCommand(
+    app: App,
+    command: String,
+    overrideCmd: Array<String>? = null,
+    onLine: (String) -> Unit
+) = withContext(Dispatchers.IO) {
     val binDir = File(app.prefixDir, "bin")
-    val script = File(app.prefixDir, "scripts/proot-distro.sh").absolutePath
 
     val env = mapOf(
         "APP_PREFIX" to app.prefixDir.absolutePath,
@@ -273,7 +316,10 @@ private suspend fun runDistroCommand(app: App, command: String, onLine: (String)
         "TMPDIR" to app.cacheDir.absolutePath,
     )
 
-    val cmd = arrayOf("/system/bin/sh", script, *command.split(" ").toTypedArray())
+    val cmd = overrideCmd ?: run {
+        val script = File(app.prefixDir, "scripts/proot-distro.sh").absolutePath
+        arrayOf("/system/bin/sh", script, *command.split(" ").toTypedArray())
+    }
 
     android.util.Log.d("PR", "Running: ${cmd.joinToString(" ")}")
     val pb = ProcessBuilder(*cmd)

@@ -17,7 +17,7 @@ class App : Application() {
         private const val KEY_INITIALIZED = "bootstrapped"
         private const val KEY_VERSION = "bootstrap_version"
 
-        private const val BOOTSTRAP_VERSION = 5
+        private const val BOOTSTRAP_VERSION = 6
     }
 
     val prefixDir: File
@@ -86,6 +86,7 @@ class App : Application() {
             "bash" to "libbash.so",
             "busybox" to "libbusybox.so",
             "proot" to "libproot.so",
+            "pr-test" to "libpr-test.so",
         )
 
         for ((name, lib) in links) {
