@@ -225,11 +225,16 @@
 
 ## Phase 4 — Android APK
 
-- [ ] **T4.1** Create Android project structure
+- [x] **T4.1** Create Android project structure
   - Package: `id.or.oo.pr`
-  - Min SDK 28, Target SDK 35
-  - Add INTERNET, FOREGROUND_SERVICE permissions
-  - Add MANAGE_EXTERNAL_STORAGE permission (optional)
+  - Min SDK 28, Target SDK 35, compileSdk 36
+  - Permissions: INTERNET, FOREGROUND_SERVICE, MANAGE_EXTERNAL_STORAGE (optional)
+  - Language: Kotlin 2.1 with AGP 8.7.3, Gradle 8.11.1
+  - Project lives in android/ subdirectory (separate from native build)
+  - Placeholder MainActivity with basic layout
+  - AppCompat theme (dark action bar)
+  - arm64-v8a only (abiFilters)
+  - Debug APK builds successfully (13MB before assets)
 
 - [ ] **T4.2** Implement BootstrapService (first-run init)
   - Extract proot from native lib to files/usr/bin/
