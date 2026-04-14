@@ -236,15 +236,16 @@
   - arm64-v8a only (abiFilters)
   - Debug APK builds successfully (13MB before assets)
 
-- [ ] **T4.2** Implement BootstrapService (first-run init)
-  - Extract proot from native lib to files/usr/bin/
-  - Extract busybox from assets to files/usr/bin/
-  - Extract bash from assets to files/usr/bin/
-  - Create applet symlinks via busybox --install
-  - Copy proot-distro.sh from assets to files/usr/bin/
-  - Replace @APP_PREFIX@ in proot-distro.sh shebang with actual path
-  - Copy plugins from assets to files/usr/etc/proot-distro/
-  - Create all data directories
+- [x] **T4.2** Implement BootstrapService (first-run init)
+  - Implemented as App.kt (Application class), runs on every app launch
+  - Copies busybox + bash from assets/bin/ to files/usr/bin/
+  - Copies proot from nativeLibraryDir (jniLibs/libproot.so) to files/usr/bin/proot
+  - Copies bootstrap.sh + proot-distro.sh from assets/scripts/ to files/usr/scripts/
+  - Copies 17 distro plugins from assets/plugins/ to files/usr/etc/proot-distro/
+  - Executes bootstrap.sh via /system/bin/sh with env vars (APP_PREFIX, PROOT_NO_SECCOMP=1)
+  - bootstrap.sh handles: chmod 755, applet symlinks, shebang template replacement
+  - Idempotent via SharedPreferences bootstrap_version (increment to re-bootstrap)
+  - APK verified: 15MB with all assets + native lib bundled
 
 - [ ] **T4.3** Implement MainActivity
   - List available distros (read plugin files)
@@ -265,15 +266,19 @@
   - Build command line
   - Execute process and return to caller
 
-- [ ] **T4.6** Bundle proot as native library
-  - Place built proot binary in `app/src/main/jniLibs/arm64-v8a/libproot.so`
-  - Android extracts to native lib path automatically
+- [x] **T4.6** Bundle proot as native library
+  - Placed at `app/src/main/jniLibs/arm64-v8a/libproot.so` (2.5MB)
+  - Android extracts to nativeLibraryDir automatically
+  - `extractNativeLibs=true` + `useLegacyPackaging=true` for uncompressed extraction
+  - BootstrapService copies from nativeLibraryDir to files/usr/bin/proot
 
-- [ ] **T4.7** Bundle assets
-  - `assets/bin/busybox-arm64`
-  - `assets/bin/bash-arm64`
-  - `assets/bin/proot-distro.sh` (with @APP_PREFIX@ template)
-  - `assets/plugins/alpine.sh`, `debian.sh`, `ubuntu.sh`, `archlinux.sh`, `fedora.sh`
+- [x] **T4.7** Bundle assets
+  - `assets/bin/busybox` (1.1MB, from build/assets/arm64-v8a/busybox)
+  - `assets/bin/bash` (2.3MB, from build/assets/arm64-v8a/bash)
+  - `assets/scripts/proot-distro.sh` (with @APP_PREFIX@ template)
+  - `assets/scripts/bootstrap.sh` (POSIX sh setup script)
+  - `assets/plugins/*.sh` (17 distro plugins)
+  - Total APK: 15MB (debug, uncompressed)
 
 ## Phase 5 — Distro Plugins & Testing
 

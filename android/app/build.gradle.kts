@@ -17,6 +17,12 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
+
+        packaging {
+            jniLibs {
+                useLegacyPackaging = true
+            }
+        }
     }
 
     buildTypes {
