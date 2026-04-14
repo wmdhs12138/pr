@@ -203,8 +203,15 @@
   - Updated test-push.sh to use bootstrap.sh flow with build/assets/ binaries
   - Verified on device: all commands work end-to-end (list, install, login, remove)
 
-- [ ] **T3.4** Verify tar compatibility
-  - Test extraction of .tar.xz, .tar.gz, .tar.bz2 rootfs tarballs
+- [x] **T3.4** Verify tar compatibility
+  - All 17 distro plugins use .tar.xz exclusively (no .tar.gz or .tar.bz2 in production)
+  - Tested busybox tar v1.37.0 extraction of all three formats on device:
+    - .tar.xz: OK (files, symlinks, subdirs, --strip, proot --link2symlink wrapper)
+    - .tar.gz: OK (files, symlinks, subdirs)
+    - .tar.bz2: OK (files, symlinks, subdirs)
+  - `--strip-components=N` works correctly
+  - proot `--link2symlink` tar wrapper works correctly
+  - No need to bundle GNU tar as fallback
   - Document any busybox tar limitations
 
 - [ ] **T3.5** Verify file command compatibility
