@@ -214,9 +214,14 @@
   - No need to bundle GNU tar as fallback
   - Document any busybox tar limitations
 
-- [ ] **T3.5** Verify file command compatibility
-  - Test `busybox file` against aarch64 and arm ELF binaries
-  - Ensure detect_cpu_arch regex handles busybox output
+- [x] **T3.5** Replace file command with ELF header parsing
+  - Critical finding: Alpine's busybox-static does NOT include `file` applet
+  - Replaced detect_cpu_arch() with ELF e_machine field parsing using `od`
+  - Reads 2 bytes at offset 18 (e_machine) from ELF header directly
+  - Architecture mapping: 0xb7→aarch64, 0x28→arm, 0x3e→x86_64, 0x03→i686, 0xf3→riscv64, 0x08→mips
+  - Updated dependency check: removed `file`, added `dd` and `hexdump`
+  - More reliable than file(1) — reads binary format directly
+  - Verified on device: detect_cpu_arch correctly identifies aarch64 from Alpine rootfs
 
 ## Phase 4 — Android APK
 

@@ -126,7 +126,7 @@ msg() {
 #
 #############################################################################
 
-for i in awk basename cat chmod cp cut du file find grep gzip \
+for i in awk basename cat chmod cp cut dd du find grep gzip hexdump \
 	head id mkdir proot realpath rm sed sha256sum stat tar wget xargs; do
 	if [ -z "$(command -v "$i")" ]; then
 		msg
@@ -235,23 +235,25 @@ detect_cpu_arch() {
 
 	local i
 	for i in /usr/bin/bash /usr/bin/sh /usr/bin/su /usr/bin/busybox /bin/bash /bin/sh /bin/su /bin/busybox; do
+		if [ ! -f "${dist_path}${i}" ]; then
+			continue
+		fi
 		if [ "$(dd if="${dist_path}${i}" bs=1 skip=1 count=3 2>/dev/null)" = "ELF" ]; then
-			cpu_arch=$(file -L "${dist_path}${i}" 2>/dev/null | grep -oE '(ARM aarch64|ARM|UCB RISC-V|Intel 80386|x86-64|MIPS)')
+			local machine
+			machine=$(od -A n -t x1 -j 18 -N 2 "${dist_path}${i}" 2>/dev/null | tr -d ' ')
+			case "$machine" in
+				b7*) cpu_arch="aarch64";;
+				28*) cpu_arch="arm";;
+				3e*) cpu_arch="x86_64";;
+				03*) cpu_arch="i686";;
+				f3*) cpu_arch="riscv64";;
+				08*) cpu_arch="mips";;
+			esac
 			[ -n "$cpu_arch" ] && break
 		fi
 	done
 
-	case "$cpu_arch" in
-		"ARM aarch64") cpu_arch="aarch64";;
-		"ARM") cpu_arch="arm";;
-		"UCB RISC-V") cpu_arch="riscv64";;
-		"Intel 80386") cpu_arch="i686";;
-		"x86-64") cpu_arch="x86_64";;
-		"MIPS") cpu_arch="mips";;
-		*) cpu_arch="unknown";;
-	esac
-
-	echo "$cpu_arch"
+	echo "${cpu_arch:-unknown}"
 }
 
 #############################################################################
