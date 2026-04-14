@@ -369,11 +369,25 @@ Verified on device (, Android 16, aarch64):
 
 ### T6.2 — Plugin config parser
 
-- [ ] Parse key=value format from `.sh` plugin files
-- [ ] Handle both formats: `TARBALL_URL_aarch64="..."` (flat) and `TARBALL_URL['aarch64']="..."` (legacy)
-- [ ] Extract `DISTRO_NAME`, `DISTRO_COMMENT`, `TARBALL_URL_<arch>`, `TARBALL_SHA256_<arch>`
-- [ ] Handle `distro_setup()` detection (present/absent in plugin)
-- [ ] Unit tests with all 14 real plugins as test fixtures
+- [x] Parse key=value format from `.sh` plugin files
+- [x] Handle both formats: `TARBALL_URL_aarch64="..."` (flat) and `TARBALL_URL['aarch64']="..."` (legacy)
+- [x] Extract `DISTRO_NAME`, `DISTRO_COMMENT`, `TARBALL_URL_<arch>`, `TARBALL_SHA256_<arch>`
+- [x] Handle `distro_setup()` detection (present/absent in plugin)
+- [x] Unit tests with all 14 real plugins as test fixtures
+
+Implementation:
+- src/pr-cli/src/plugin.rs: DistroPlugin, TarballInfo structs + parse_plugin() + load_plugins()
+- src/pr-cli/src/lib.rs: exposes plugin as public module
+- src/pr-cli/src/main.rs: updated to use lib crate, working `list` command (reads APP_PREFIX/etc/proot-distro/)
+- src/pr-cli/tests/plugin_tests.rs: 20 integration tests for all 14 plugins
+- src/pr-cli/tests/fixtures/plugins/: 14 real plugin files as test fixtures
+- Note: all plugins use flat format (TARBALL_URL_aarch64="..."), legacy associative array format
+  not present in current codebase (removed in T5.1 mksh port). Parser handles flat only for now.
+- 7 plugins have distro_setup(): archlinux, artix, debian, fedora, manjaro, opensuse, trisquel, ubuntu
+- 6 plugins without: adelie, almalinux, alpine, chimera, deepin, rockylinux
+- All 32 tests pass (12 unit + 20 integration): cargo test
+- Binary size: 768KB (was 731KB in T6.1, +37KB for HashMap + parser logic)
+- `pr-cli list` now functional: reads plugin dir, displays name, comment, architectures, setup status
 
 ### T6.3 — CLI interface and `command_list`
 

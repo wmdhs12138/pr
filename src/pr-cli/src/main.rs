@@ -1,4 +1,6 @@
 use clap::{Parser, Subcommand};
+use pr_cli::plugin::load_plugins;
+use std::path::PathBuf;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -56,6 +58,12 @@ enum Commands {
     ClearCache {},
 }
 
+fn get_plugins_dir() -> PathBuf {
+    let prefix = std::env::var("APP_PREFIX")
+        .unwrap_or_else(|_| "/data/data/id.or.oo.pr/files/usr".to_string());
+    PathBuf::from(prefix).join("etc/proot-distro")
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -73,8 +81,15 @@ fn main() {
             std::process::exit(1);
         }
         Commands::List { .. } => {
-            eprintln!("list: not yet implemented");
-            std::process::exit(1);
+            let dir = get_plugins_dir();
+            let plugins = load_plugins(&dir);
+            if plugins.is_empty() {
+                eprintln!("No distributions found in {}", dir.display());
+                std::process::exit(1);
+            }
+            for p in &plugins {
+                println!("{}", p);
+            }
         }
         Commands::Backup { distro } => {
             eprintln!("backup: not yet implemented (distro={})", distro);
