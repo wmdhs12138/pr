@@ -58,19 +58,24 @@ create_directories() {
 install_busybox() {
     log "Installing busybox..."
     local bb_src="${BIN_DIR}/busybox"
-    if [ ! -f "$bb_src" ]; then
-        die "busybox binary not found at ${bb_src}"
+    if [ ! -e "$bb_src" ]; then
+        die "busybox not found at ${bb_src}"
     fi
-    chmod 755 "$bb_src"
+    [ -f "$bb_src" ] && chmod 755 "$bb_src" 2>/dev/null || true
 
-    log "Creating applet symlinks..."
-    local applet
-    "$bb_src" --list 2>/dev/null | while read -r applet; do
-        [ -z "$applet" ] && continue
-        [ -L "${BIN_DIR}/${applet}" ] && continue
-        [ -e "${BIN_DIR}/${applet}" ] && continue
-        ln -s busybox "${BIN_DIR}/${applet}"
-    done
+    if [ -L "${BIN_DIR}/sh" ]; then
+        log "Applet symlinks already exist, skipping creation"
+    else
+        log "Creating applet symlinks..."
+        ln -s busybox "${BIN_DIR}/sh" 2>/dev/null || true
+        for applet in awk basename cat chmod cp curl cut date dirname grep head \
+            id ln ls mkdir mv printf pwd readlink realpath rm rmdir sed stat \
+            tail tar test tr uname uniq wc wget which xargs; do
+            [ -L "${BIN_DIR}/${applet}" ] && continue
+            [ -e "${BIN_DIR}/${applet}" ] && continue
+            ln -s busybox "${BIN_DIR}/${applet}" 2>/dev/null || true
+        done
+    fi
 
     local count
     count=$(ls "${BIN_DIR}" | wc -l)
@@ -80,20 +85,20 @@ install_busybox() {
 install_bash() {
     log "Installing bash..."
     local bash_src="${BIN_DIR}/bash"
-    if [ ! -f "$bash_src" ]; then
-        die "bash binary not found at ${bash_src}"
+    if [ ! -e "$bash_src" ]; then
+        die "bash not found"
     fi
-    chmod 755 "$bash_src"
-    log "bash installed ($(ls -l "$bash_src" | awk '{print $5}') bytes)"
+    [ -f "$bash_src" ] && chmod 755 "$bash_src" 2>/dev/null || true
+    log "bash installed"
 }
 
 install_proot() {
     log "Installing proot..."
     local proot_src="${BIN_DIR}/proot"
-    if [ ! -f "$proot_src" ]; then
-        die "proot binary not found at ${proot_src}"
+    if [ ! -e "$proot_src" ]; then
+        die "proot not found at ${proot_src}"
     fi
-    chmod 755 "$proot_src"
+    [ -f "$proot_src" ] && chmod 755 "$proot_src" 2>/dev/null || true
     log "proot installed"
 }
 

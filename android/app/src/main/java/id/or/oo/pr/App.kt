@@ -3,7 +3,7 @@ package id.or.oo.pr
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
-import android.os.Build
+import android.system.Os
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -17,7 +17,7 @@ class App : Application() {
         private const val KEY_INITIALIZED = "bootstrapped"
         private const val KEY_VERSION = "bootstrap_version"
 
-        private const val BOOTSTRAP_VERSION = 1
+        private const val BOOTSTRAP_VERSION = 3
     }
 
     val prefixDir: File
@@ -25,6 +25,9 @@ class App : Application() {
 
     val homeDir: File
         get() = File(filesDir, "home")
+
+    val nativeLibDir: File
+        get() = File(applicationInfo.nativeLibraryDir)
 
     override fun onCreate() {
         super.onCreate()
@@ -34,6 +37,7 @@ class App : Application() {
         if (currentVersion < BOOTSTRAP_VERSION) {
             bootstrap(prefs)
         } else {
+            ensureNativeLibSymlinks()
             Log.i(TAG, "Already bootstrapped (version $currentVersion)")
         }
     }
@@ -46,21 +50,19 @@ class App : Application() {
             val binDir = File(prefixDir, "bin")
             val etcDir = File(prefixDir, "etc/proot-distro")
             val scriptsDir = File(prefixDir, "scripts")
-            val pluginsDir = File(prefixDir, "plugins")
 
             binDir.mkdirs()
             etcDir.mkdirs()
             scriptsDir.mkdirs()
-            pluginsDir.mkdirs()
             homeDir.mkdirs()
             File(prefixDir, "tmp").mkdirs()
 
-            copyAssetBinary("bin/busybox", File(binDir, "busybox"))
-            copyAssetBinary("bin/bash", File(binDir, "bash"))
-            copyProotFromNativeLib(binDir)
+            ensureNativeLibSymlinks()
+            createBusyboxSymlinks(binDir)
+
             copyAssetFile("scripts/bootstrap.sh", File(binDir, "bootstrap.sh"))
             copyAssetFile("scripts/proot-distro.sh", File(scriptsDir, "proot-distro.sh"))
-            copyAssetPlugins(pluginsDir, etcDir)
+            copyAssetPlugins(etcDir)
 
             executeBootstrap()
 
@@ -76,42 +78,53 @@ class App : Application() {
         }
     }
 
-    private fun copyAssetBinary(assetPath: String, dest: File) {
-        assets.open(assetPath).use { input ->
-            FileOutputStream(dest).use { output ->
-                input.copyTo(output)
+    private fun ensureNativeLibSymlinks() {
+        val binDir = File(prefixDir, "bin")
+        binDir.mkdirs()
+
+        val links = mapOf(
+            "bash" to "libbash.so",
+            "busybox" to "libbusybox.so",
+            "proot" to "libproot.so",
+        )
+
+        for ((name, lib) in links) {
+            val link = File(binDir, name)
+            val target = File(nativeLibDir, lib)
+            if (!target.exists()) {
+                Log.w(TAG, "$lib not found in $nativeLibDir")
+                continue
             }
+
+            if (link.exists()) {
+                val currentTarget = link.canonicalPath
+                if (currentTarget == target.canonicalPath) continue
+                link.delete()
+            }
+
+            Os.symlink(target.absolutePath, link.absolutePath)
+            Log.d(TAG, "Symlink: $name -> ${target.absolutePath}")
         }
-        dest.setExecutable(true, false)
-        dest.setReadable(true, false)
-        Log.d(TAG, "Installed: ${dest.name} (${dest.length()} bytes)")
     }
 
-    private fun copyProotFromNativeLib(binDir: File) {
-        val nativeDir = File(applicationInfo.nativeLibraryDir)
-        val libProot = File(nativeDir, "libproot.so")
-        val dest = File(binDir, "proot")
+    private fun createBusyboxSymlinks(binDir: File) {
+        Log.d(TAG, "Creating busybox applet symlinks...")
 
-        if (libProot.exists()) {
-            libProot.copyTo(dest, overwrite = true)
-            dest.setExecutable(true, false)
-            dest.setReadable(true, false)
-            Log.d(TAG, "Installed: proot from native lib (${dest.length()} bytes)")
-        } else {
-            Log.w(TAG, "libproot.so not found at $nativeDir, trying ABI split path")
-            val altPath = File(
-                applicationInfo.sourceDir.replace(".apk", ""),
-                "lib/arm64/libproot.so"
-            )
-            if (altPath.exists()) {
-                altPath.copyTo(dest, overwrite = true)
-                dest.setExecutable(true, false)
-                dest.setReadable(true, false)
-                Log.d(TAG, "Installed: proot from alt path (${dest.length()} bytes)")
-            } else {
-                Log.e(TAG, "proot binary not found!")
+        val applets = assets.open("bin/busybox.applets").bufferedReader().readLines()
+            .filter { it.isNotBlank() }
+        var count = 0
+        for (applet in applets) {
+            val link = File(binDir, applet)
+            if (link.exists()) continue
+            try {
+                Os.symlink("busybox", link.absolutePath)
+                count++
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to create symlink for $applet: ${e.message}")
             }
         }
+
+        Log.d(TAG, "Created $count busybox applet symlinks")
     }
 
     private fun copyAssetFile(assetPath: String, dest: File) {
@@ -125,7 +138,7 @@ class App : Application() {
         Log.d(TAG, "Installed: ${dest.name}")
     }
 
-    private fun copyAssetPlugins(pluginsStaging: File, etcDir: File) {
+    private fun copyAssetPlugins(etcDir: File) {
         val pluginFiles = assets.list("plugins") ?: emptyArray()
         var count = 0
         for (name in pluginFiles) {
@@ -150,11 +163,12 @@ class App : Application() {
             return
         }
 
+        val binDir = File(prefixDir, "bin")
         val env = mapOf(
             "APP_PREFIX" to prefixDir.absolutePath,
             "APP_HOME" to homeDir.absolutePath,
             "APP_PACKAGE" to packageName,
-            "PATH" to "${File(prefixDir, "bin").absolutePath}",
+            "PATH" to "/system/bin:/system/xbin:${binDir.absolutePath}",
             "PROOT_NO_SECCOMP" to "1",
             "HOME" to homeDir.absolutePath,
         )
@@ -169,7 +183,6 @@ class App : Application() {
         pb.redirectErrorStream(true)
 
         Log.d(TAG, "Executing: ${cmd.joinToString(" ")}")
-        Log.d(TAG, "APP_PREFIX=${env["APP_PREFIX"]}")
 
         val proc = pb.start()
         val output = proc.inputStream.bufferedReader().readText()

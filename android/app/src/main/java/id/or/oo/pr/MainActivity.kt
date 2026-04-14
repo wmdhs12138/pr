@@ -7,6 +7,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Delete
@@ -53,7 +55,7 @@ fun DistroListScreen(app: App) {
     val scope = rememberCoroutineScope()
     var distros by remember { mutableStateOf<List<DistroInfo>>(emptyList()) }
     var loadingDistro by remember { mutableStateOf<String?>(null) }
-    var outputText by remember { mutableStateOf("") }
+    var outputLines by remember { mutableStateOf(mutableListOf<String>()) }
     var showOutput by remember { mutableStateOf(false) }
 
     fun refreshDistros() {
@@ -92,24 +94,38 @@ fun DistroListScreen(app: App) {
                     .padding(padding)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Output", style = MaterialTheme.typography.titleMedium)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (loadingDistro != null) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text("Output", style = MaterialTheme.typography.titleMedium)
+                    }
                     TextButton(onClick = {
                         showOutput = false
-                        outputText = ""
+                        outputLines = mutableListOf()
                         refreshDistros()
                     }) {
                         Text("Close")
                     }
                 }
+                val scrollState = rememberScrollState()
+                LaunchedEffect(outputLines.size) {
+                    scrollState.animateScrollTo(Int.MAX_VALUE)
+                }
                 Text(
-                    text = outputText,
+                    text = outputLines.joinToString("\n"),
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(8.dp),
+                        .padding(8.dp)
+                        .verticalScroll(scrollState),
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -128,13 +144,12 @@ fun DistroListScreen(app: App) {
                             if (loadingDistro == null) {
                                 loadingDistro = distro.name
                                 showOutput = true
-                                outputText = "Installing ${distro.displayName}...\n"
+                                outputLines = mutableListOf("Installing ${distro.displayName}...")
                                 scope.launch {
                                     runDistroCommand(app, "install ${distro.name}") { line ->
-                                        outputText += line + "\n"
+                                        outputLines = (outputLines + line).toMutableList()
                                     }
                                     loadingDistro = null
-                                    refreshDistros()
                                 }
                             }
                         },
@@ -149,13 +164,12 @@ fun DistroListScreen(app: App) {
                             if (loadingDistro == null) {
                                 loadingDistro = distro.name
                                 showOutput = true
-                                outputText = "Removing ${distro.displayName}...\n"
+                                outputLines = mutableListOf("Removing ${distro.displayName}...")
                                 scope.launch {
                                     runDistroCommand(app, "remove ${distro.name}") { line ->
-                                        outputText += line + "\n"
+                                        outputLines = (outputLines + line).toMutableList()
                                     }
                                     loadingDistro = null
-                                    refreshDistros()
                                 }
                             }
                         },
@@ -245,9 +259,8 @@ private fun parsePluginName(pluginFile: File): String? {
 
 private suspend fun runDistroCommand(app: App, command: String, onLine: (String) -> Unit) = withContext(Dispatchers.IO) {
     val launcher = ProotLauncher(app)
-    val script = File(app.prefixDir, "scripts/proot-distro.sh").absolutePath
-    val session = launcher.runCommand("source $script 2>/dev/null; proot-distro $command") ?: run {
-        onLine("ERROR: Failed to start session")
+    val session = launcher.runCommand("proot-distro $command") ?: run {
+        withContext(Dispatchers.Main) { onLine("ERROR: Failed to start session") }
         return@withContext
     }
 
@@ -257,9 +270,16 @@ private suspend fun runDistroCommand(app: App, command: String, onLine: (String)
             val n = session.read(buf)
             if (n < 0) break
             if (n > 0) {
-                val text = String(buf, 0, n)
-                withContext(Dispatchers.Main) {
-                    text.lines().forEach { onLine(it) }
+                val raw = String(buf, 0, n)
+                val cleaned = raw
+                    .replace(Regex("\r\\x1B\\[[0-9;]*K"), "")
+                    .replace(Regex("\r[^\n]"), "")
+                    .replace(Regex("\\x1B\\[[0-9;]*[mGKHJ]"), "")
+                    .trim()
+                if (cleaned.isNotEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        cleaned.lines().filter { it.isNotBlank() }.forEach { onLine(it) }
+                    }
                 }
             }
         }

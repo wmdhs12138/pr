@@ -12,6 +12,9 @@ class ProotLauncher(private val app: App) {
     val prefixDir: File
         get() = app.prefixDir
 
+    private val bashPath: String
+        get() = File(app.nativeLibDir, "libbash.so").absolutePath
+
     fun startSession(
         distroName: String,
         user: String = "root",
@@ -19,24 +22,17 @@ class ProotLauncher(private val app: App) {
         rows: Int = 24,
         cols: Int = 80
     ): Session? {
-        val binDir = File(prefixDir, "bin")
-        val bash = File(binDir, "bash")
         val script = File(prefixDir, "scripts/proot-distro.sh")
-
-        if (!bash.exists()) {
-            Log.e(TAG, "bash not found at $bash")
-            return null
-        }
         if (!script.exists()) {
             Log.e(TAG, "proot-distro.sh not found at $script")
             return null
         }
 
         val envVars = buildEnvVars()
-        val cmd = bash.absolutePath
-        val args = buildArgs(script.absolutePath, distroName, user, isolated)
+        val loginCmd = "${script.absolutePath} login $distroName --user $user"
+        val args = arrayOf(bashPath, "-c", loginCmd)
 
-        val masterFd = PtyNative.forkPty(cmd, args, envVars, rows, cols)
+        val masterFd = PtyNative.forkPty(bashPath, args, envVars, rows, cols)
         if (masterFd < 0) {
             Log.e(TAG, "forkPty failed with fd=$masterFd")
             return null
@@ -51,34 +47,19 @@ class ProotLauncher(private val app: App) {
         rows: Int = 24,
         cols: Int = 80,
     ): Session? {
-        val binDir = File(prefixDir, "bin")
-        val bash = File(binDir, "bash")
         val script = File(prefixDir, "scripts/proot-distro.sh")
-
-        if (!bash.exists()) {
-            Log.e(TAG, "bash not found at $bash")
-            return null
-        }
-
         val envVars = buildEnvVars()
-        val fullCommand = "source ${script.absolutePath} 2>/dev/null; $command"
-        val args = arrayOf("-c", fullCommand)
+        val fullCommand = "source '${script.absolutePath}' 2>/dev/null; $command"
+        val args = arrayOf(bashPath, "-c", fullCommand)
 
-        val masterFd = PtyNative.forkPty(bash.absolutePath, args, envVars, rows, cols)
+        val masterFd = PtyNative.forkPty(bashPath, args, envVars, rows, cols)
         if (masterFd < 0) {
             Log.e(TAG, "forkPty failed for command: $command")
             return null
         }
 
+        Log.i(TAG, "PTY command started: $command, masterFd=$masterFd")
         return Session(masterFd)
-    }
-
-    private fun buildArgs(scriptPath: String, distroName: String, user: String, isolated: Boolean): Array<String> {
-        val args = mutableListOf(scriptPath, "login", distroName, "--user", user)
-        if (isolated) {
-            args.add("--isolated")
-        }
-        return args.toTypedArray()
     }
 
     private fun buildEnvVars(): Array<String> {
