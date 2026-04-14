@@ -344,6 +344,7 @@
 
 - [ ] **T6.3** README and user documentation
   - Write README.md for github.com/oonid/pr
+  - Include project name explanation: pr = PRoot = ptrace-based root (see docs/name.md)
   - Document supported devices and known limitations
   - Document how to add custom distro plugins
   - Document how to build from source
