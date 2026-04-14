@@ -1,4 +1,4 @@
-#!@APP_PREFIX@/bin/bash
+#!/system/bin/sh
 # shellcheck disable=SC2239
 ##
 ## Proot-Distro is a script for managing proot containers.
@@ -33,6 +33,25 @@ PROGRAM_VERSION="4.38.0"
 #
 
 set -e -u
+
+_DISTRO_KEYS=""
+
+_get_distro_name() { eval "printf '%s' \"\${SUPPORTED_DISTRIBUTIONS__${1}}\""; }
+_get_distro_comment() { eval "printf '%s' \"\${SUPPORTED_DISTRIBUTIONS_COMMENTS__${1}}\""; }
+_has_distro() { eval "[ -n \"\${SUPPORTED_DISTRIBUTIONS__${1}+x}\" ]"; }
+_has_distro_comment() { eval "[ -n \"\${SUPPORTED_DISTRIBUTIONS_COMMENTS__${1}+x}\" ]"; }
+_set_distro_name() {
+	eval "SUPPORTED_DISTRIBUTIONS__${1}=\"\${2}\""
+	case " $_DISTRO_KEYS " in
+		*" $1 "*) ;;
+		*) _DISTRO_KEYS="$_DISTRO_KEYS $1" ;;
+	esac
+}
+_set_distro_comment() { eval "SUPPORTED_DISTRIBUTIONS_COMMENTS__${1}=\"\${2}\""; }
+_get_tarball_url() { eval "printf '%s' \"\${TARBALL_URL_${1}}\""; }
+_get_tarball_sha256() { eval "printf '%s' \"\${TARBALL_SHA256_${1}}\""; }
+_set_tarball_url() { eval "TARBALL_URL_${1}=\"\${2}\""; }
+_set_tarball_sha256() { eval "TARBALL_SHA256_${1}=\"\${2}\""; }
 
 # Installation paths - set via environment or defaults.
 # The APK BootstrapService sets these before launching this script.
@@ -330,7 +349,7 @@ command_install() {
 	local override_alias
 	local distro_plugin_script
 
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			--)
 				shift 1
@@ -406,7 +425,7 @@ command_install() {
 		return 1
 	fi
 
-	if [ -z "${SUPPORTED_DISTRIBUTIONS["$distro_name"]+x}" ]; then
+	if ! _has_distro "$distro_name"; then
 		msg
 		msg "${BRED}Error: unknown distribution '${YELLOW}${distro_name}${BRED}' was requested to be installed.${RST}"
 		msg
@@ -420,8 +439,8 @@ command_install() {
 			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Creating file '${DISTRO_PLUGINS_DIR}/${override_alias}.override.sh'...${RST}"
 			distro_plugin_script="${DISTRO_PLUGINS_DIR}/${override_alias}.override.sh"
 			cp "${DISTRO_PLUGINS_DIR}/${distro_name}.sh" "${distro_plugin_script}"
-			sed -i "s/^\(DISTRO_NAME=\)\(.*\)\$/\1\"${SUPPORTED_DISTRIBUTIONS["$distro_name"]} - ${override_alias}\"/g" "${distro_plugin_script}"
-			SUPPORTED_DISTRIBUTIONS["${override_alias}"]="${SUPPORTED_DISTRIBUTIONS["$distro_name"]}"
+			sed -i "s/^\(DISTRO_NAME=\)\(.*\)\$/\1\"$(_get_distro_name "$distro_name") - ${override_alias}\"/g" "${distro_plugin_script}"
+			_set_distro_name "${override_alias}" "$(_get_distro_name "$distro_name")"
 			distro_name="${override_alias}"
 		else
 			msg
@@ -450,7 +469,7 @@ command_install() {
 	fi
 
 	if [ -f "${distro_plugin_script}" ]; then
-		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Installing ${YELLOW}${SUPPORTED_DISTRIBUTIONS["$distro_name"]}${CYAN}...${RST}"
+		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Installing ${YELLOW}$(_get_distro_name "$distro_name")${CYAN}...${RST}"
 
 		# Make sure things are cleared up on failure or user requested exit.
 		# shellcheck disable=SC2064 # variables must expand here
@@ -472,19 +491,16 @@ command_install() {
 
 		# This should be overridden in distro plug-in with valid URL for
 		# each architecture where possible.
-		TARBALL_URL["aarch64"]=""
-		TARBALL_URL["arm"]=""
-		TARBALL_URL["i686"]=""
-		TARBALL_URL["riscv64"]=""
-		TARBALL_URL["x86_64"]=""
-
-		# This should be overridden in distro plug-in with valid SHA-256
-		# for corresponding archives.
-		TARBALL_SHA256["aarch64"]=""
-		TARBALL_SHA256["arm"]=""
-		TARBALL_SHA256["i686"]=""
-		TARBALL_SHA256["riscv64"]=""
-		TARBALL_SHA256["x86_64"]=""
+		_set_tarball_url aarch64 ""
+		_set_tarball_url arm ""
+		_set_tarball_url i686 ""
+		_set_tarball_url riscv64 ""
+		_set_tarball_url x86_64 ""
+		_set_tarball_sha256 aarch64 ""
+		_set_tarball_sha256 arm ""
+		_set_tarball_sha256 i686 ""
+		_set_tarball_sha256 riscv64 ""
+		_set_tarball_sha256 x86_64 ""
 
 		# If your content inside archive isn't stored in subdirectory,
 		# you can override this variable in distro plug-in with 0.
@@ -506,21 +522,21 @@ command_install() {
 
 		# If user wants custom download URL
 		if [ -n "${PD_OVERRIDE_TARBALL_URL-}" ]; then
-			TARBALL_URL["$DISTRO_ARCH"]="${PD_OVERRIDE_TARBALL_URL}"
-			TARBALL_SHA256["$DISTRO_ARCH"]="${PD_OVERRIDE_TARBALL_SHA256}"
+			_set_tarball_url "$DISTRO_ARCH" "${PD_OVERRIDE_TARBALL_URL}"
+			_set_tarball_sha256 "$DISTRO_ARCH" "${PD_OVERRIDE_TARBALL_SHA256}"
 		fi
 		if [ -n "${PD_OVERRIDE_TARBALL_STRIP_OPT-}" ]; then
 			TARBALL_STRIP_OPT="${PD_OVERRIDE_TARBALL_STRIP_OPT}"
 		fi
 
 		# Cannot proceed without URL and SHA-256.
-		if [ -z "${TARBALL_URL["$DISTRO_ARCH"]}" ]; then
+		if [ -z "$(_get_tarball_url "$DISTRO_ARCH")" ]; then
 			msg "${BLUE}[${RED}!${BLUE}] ${CYAN}The distribution download URL is not defined for CPU architecture '${DISTRO_ARCH}'.${RST}"
 			return 1
 		fi
 		# But SHA-256 should be ignored for custom URLs if another SHA-256 is not given.
 		if [ -z "${PD_OVERRIDE_TARBALL_URL-}" ] && [ -n "${PD_OVERRIDE_TARBALL_SHA256-}" ]; then
-			if ! grep -qE '^[0-9a-fA-F]{64}$' <<< "${TARBALL_SHA256["$DISTRO_ARCH"]}"; then
+			if ! grep -qE '^[0-9a-fA-F]{64}$' <<< "$(_get_tarball_sha256 "$DISTRO_ARCH")"; then
 				msg
 				msg "${BRED}Error: got malformed SHA-256 from plug-in script '${distro_plugin_script}'.${RST}"
 				msg
@@ -529,14 +545,14 @@ command_install() {
 		fi
 
 		local archive_name
-		archive_name=$(basename "${TARBALL_URL["$DISTRO_ARCH"]}")
+		archive_name=$(basename "$(_get_tarball_url "$DISTRO_ARCH")")
 
 		if [ ! -f "${DOWNLOAD_CACHE_DIR}/${archive_name}" ]; then
 			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Downloading rootfs archive...${RST}"
-			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}URL: ${TARBALL_URL["$DISTRO_ARCH"]}${RST}"
+			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}URL: $(_get_tarball_url "$DISTRO_ARCH")${RST}"
 			msg
 
-			if ! download_file "${TARBALL_URL["$DISTRO_ARCH"]}" "${DOWNLOAD_CACHE_DIR}/${archive_name}" 3; then
+			if ! download_file "$(_get_tarball_url "$DISTRO_ARCH")" "${DOWNLOAD_CACHE_DIR}/${archive_name}" 3; then
 				msg
 				msg "${BLUE}[${RED}!${BLUE}] ${CYAN}Download failure, please check your network connection.${RST}"
 				rm -f "${DOWNLOAD_CACHE_DIR}/${archive_name}"
@@ -547,12 +563,12 @@ command_install() {
 			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Using cached rootfs archive...${RST}"
 		fi
 
-		if [ -n "${TARBALL_SHA256["$DISTRO_ARCH"]}" ]; then
+		if [ -n "$(_get_tarball_sha256 "$DISTRO_ARCH")" ]; then
 			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Checking integrity, please wait...${RST}"
 			local actual_sha256
 			actual_sha256=$(sha256sum "${DOWNLOAD_CACHE_DIR}/${archive_name}" | awk '{ print $1}')
 
-			if [ "${TARBALL_SHA256["$DISTRO_ARCH"]}" != "${actual_sha256}" ]; then
+			if [ "$(_get_tarball_sha256 "$DISTRO_ARCH")" != "${actual_sha256}" ]; then
 				msg "${BLUE}[${RED}!${BLUE}] ${CYAN}Integrity checking failed. Try to redo installation again.${RST}"
 				rm -f "${DOWNLOAD_CACHE_DIR}/${archive_name}"
 				return 1
@@ -567,7 +583,7 @@ command_install() {
 		# --delay-directory-restore - set directory permissions only when files were extracted
 		#                             to avoid issues with Arch Linux bootstrap archives.
 		set +e
-		proot --link2symlink \
+		PROOT_NO_SECCOMP=1 proot --link2symlink \
 			tar -C "${INSTALLED_ROOTFS_DIR}/${distro_name}" \
 			--strip="${TARBALL_STRIP_OPT}" \
 			-xf "${DOWNLOAD_CACHE_DIR}/${archive_name}" --exclude='dev' 2>&1 | grep -v "/linkerconfig/" >&2
@@ -588,11 +604,12 @@ command_install() {
 		chmod u+rw "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" >/dev/null 2>&1 || true
 		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Writing file '${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment'...${RST}"
 		for var in ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT \
-			ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH COLORTERM \
+			ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH \
 			DEX2OATBOOTCLASSPATH EXTERNAL_STORAGE; do
 			set +u
-			if [ -n "${!var}" ]; then
-				echo "${var}=${!var}" >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
+			eval "_val=\${$var}"
+			if [ -n "$_val" ]; then
+				echo "${var}=${_val}" >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
 			fi
 			set -u
 		done
@@ -653,17 +670,19 @@ command_install() {
 		echo "aid_$(id -un):*:18446:0:99999:7:::" >> \
 			"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/shadow"
 		local __group_names __group_ids
-		read -ra __group_names <<< "$(id -Gn)"
-		read -ra __group_ids <<< "$(id -G)"
-		for ((i=0; i<${#__group_names[@]}; i++)); do
-			local group_name="${__group_names[$i]}"
-			local group_id="${__group_ids[$i]}"
+		__group_names=$(id -Gn)
+		__group_ids=$(id -G)
+		local i=0
+		for group_name in $__group_names; do
+			set -- $__group_ids
+			eval "local group_id=\"\$$((i + 1))\""
 			echo "aid_${group_name}:x:${group_id}:root,aid_$(id -un)" \
 				>> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/group"
 			if [ -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow" ]; then
 				echo "aid_${group_name}:*::root,aid_$(id -un)" \
 					>> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/gshadow"
 			fi
+			i=$((i + 1))
 		done
 		unset __group_names __group_ids
 
@@ -671,7 +690,7 @@ command_install() {
 		setup_fake_sysdata
 
 		# Run optional distro-specific hook.
-		if declare -f -F distro_setup >/dev/null 2>&1; then
+		if type distro_setup >/dev/null 2>&1; then
 			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Running distribution-specific configuration steps...${RST}"
 			(cd "${INSTALLED_ROOTFS_DIR}/${distro_name}"
 				distro_setup
@@ -1142,7 +1161,7 @@ command_install_help() {
 command_remove() {
 	local distro_name
 
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			-h|--help)
 				command_remove_help
@@ -1181,7 +1200,7 @@ command_remove() {
 		return 1
 	fi
 
-	if [ -z "${SUPPORTED_DISTRIBUTIONS["$distro_name"]+x}" ]; then
+	if ! _has_distro "$distro_name"; then
 		msg
 		msg "${BRED}Error: unknown distribution '${YELLOW}${distro_name}${BRED}' was requested to be removed.${RST}"
 		msg
@@ -1204,7 +1223,7 @@ command_remove() {
 		rm -f "${DISTRO_PLUGINS_DIR}/${distro_name}.override.sh"
 	fi
 
-	msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Wiping the rootfs of ${YELLOW}${SUPPORTED_DISTRIBUTIONS["$distro_name"]}${CYAN}...${RST}"
+	msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Wiping the rootfs of ${YELLOW}$(_get_distro_name "$distro_name")${CYAN}...${RST}"
 	# Attempt to restore permissions so directory can be removed without issues.
 	chmod u+rwx -R "${INSTALLED_ROOTFS_DIR}/${distro_name}" > /dev/null 2>&1 || true
 	# There is still chance for failure.
@@ -1253,7 +1272,7 @@ command_rename() {
 	local orig_distro_name
 	local new_distro_name
 
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			-h|--help)
 				command_rename_help
@@ -1330,7 +1349,7 @@ command_rename() {
 		return 1
 	fi
 
-	if [ -z "${SUPPORTED_DISTRIBUTIONS["$orig_distro_name"]+x}" ]; then
+	if ! _has_distro "$orig_distro_name"; then
 		msg
 		msg "${BRED}Error: unknown distribution '${YELLOW}${orig_distro_name}${BRED}' was requested to be renamed.${RST}"
 		msg
@@ -1367,7 +1386,7 @@ command_rename() {
 	elif [ -e "${DISTRO_PLUGINS_DIR}/${orig_distro_name}.sh" ]; then
 		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Creating file '${DISTRO_PLUGINS_DIR}/${new_distro_name}.override.sh'...${RST}"
 		cp "${DISTRO_PLUGINS_DIR}/${orig_distro_name}.sh" "${DISTRO_PLUGINS_DIR}/${new_distro_name}.override.sh"
-		sed -i "s/^\(DISTRO_NAME=\)\(.*\)\$/\1\"${SUPPORTED_DISTRIBUTIONS["$orig_distro_name"]} - ${new_distro_name}\"/g" "${DISTRO_PLUGINS_DIR}/${new_distro_name}.override.sh"
+		sed -i "s/^\(DISTRO_NAME=\)\(.*\)\$/\1\"$(_get_distro_name "$orig_distro_name") - ${new_distro_name}\"/g" "${DISTRO_PLUGINS_DIR}/${new_distro_name}.override.sh"
 	else
 		msg
 		msg "${BRED}Error: could not find a plug-in for distribution '${YELLOW}${orig_distro_name}${BRED}'.${RST}"
@@ -1429,7 +1448,7 @@ command_rename_help() {
 command_reset() {
 	local distro_name
 
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			-h|--help)
 				command_reset_help
@@ -1468,7 +1487,7 @@ command_reset() {
 		return 1
 	fi
 
-	if [ -z "${SUPPORTED_DISTRIBUTIONS["$distro_name"]+x}" ]; then
+	if ! _has_distro "$distro_name"; then
 		msg
 		msg "${BRED}Error: unknown distribution '${YELLOW}${distro_name}${BRED}' was requested to be reset.${RST}"
 		msg
@@ -1523,20 +1542,20 @@ command_reset_help() {
 command_login() {
 	local fix_low_ports=false
 	local isolated_environment=false
-	local -a custom_fs_bindings
+	local custom_fs_bindings
 	local no_link2symlink=false
 	local no_sysvipc=false
 	local no_kill_on_exit=false
 	local no_arch_warning=false
 	local login_user="root"
 	local login_wd=""
-	local -a login_env_vars
+	local login_env_vars
 	login_env_vars=("PATH=${DEFAULT_PATH_ENV}")
 	local kernel_release="${DEFAULT_FAKE_KERNEL_RELEASE}"
 	local hostname="localhost"
 	local distro_name
 
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			--)
 				shift 1
@@ -1711,7 +1730,7 @@ command_login() {
 		return 1
 	fi
 
-	if [ -z "${SUPPORTED_DISTRIBUTIONS["$distro_name"]+x}" ]; then
+	if ! _has_distro "$distro_name"; then
 		msg
 		msg "${BRED}Error: unknown distribution '${YELLOW}${distro_name}${BRED}' was requested for logging in.${RST}"
 		msg
@@ -1805,11 +1824,10 @@ command_login() {
 		ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH \
 		DEX2OATBOOTCLASSPATH; do
 		set +u
-		if [ -n "${!var}" ]; then
-			# Create new variable entry instead of editing as variable may
-			# not exist in the file.
+		eval "_val=\${$var}"
+		if [ -n "$_val" ]; then
 			sed -i "/^${var}=/d" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
-			echo "${var}=${!var}" >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
+			echo "${var}=${_val}" >> "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
 		fi
 		set -u
 	done
@@ -1819,8 +1837,9 @@ command_login() {
 		ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH \
 		DEX2OATBOOTCLASSPATH EXTERNAL_STORAGE; do
 		set +u
-		if [ -n "${!var}" ]; then
-			login_env_vars+=("${var}=${!var}")
+		eval "_val=\${$var}"
+		if [ -n "$_val" ]; then
+			login_env_vars+=("${var}=${_val}")
 		fi
 		set -u
 	done
@@ -1828,13 +1847,16 @@ command_login() {
 
 	# Handle /etc/environment.
 	if [ -e "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" ]; then
-		mapfile -t -O "${#login_env_vars[@]}" login_env_vars < <(
-			grep -E '^[A-Za-z_][A-Za-z0-9_]+=.+' "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" | \
-				sed -E \
-					-e "s/^([^=]+=)['\"]/\1/g" \
-					-e "s/['\"]\$//g" \
-					-e "/^[^=]+\$/d"
-		)
+		_env_tmp="${TMPDIR:-/tmp}/pd_env_$$"
+		grep -E '^[A-Za-z_][A-Za-z0-9_]+=.+' "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" | \
+			sed -E \
+				-e "s/^([^=]+=)['\"]/\1/g" \
+				-e "s/['\"]\$//g" \
+				-e "/^[^=]+\$/d" > "$_env_tmp" 2>/dev/null
+		while IFS= read -r _line; do
+			[ -n "$_line" ] && login_env_vars+=("$_line")
+		done < "$_env_tmp"
+		rm -f "$_env_tmp" 2>/dev/null
 	fi
 
 	# Using '-i' to ensure that we can fully control which
@@ -1968,12 +1990,14 @@ command_login() {
 	set -- "--bind=/proc/self/fd:/dev/fd" "$@"
 
 	# Bind /proc/self/fd/{0,1,2} only if not launched under pipe
-	local i fds
-	fds=(stdin stdout stderr)
-	for i in "${!fds[@]}"; do
-		realpath -e "/proc/self/fd/$i" >/dev/null 2>&1 && set -- "--bind=/proc/self/fd/$i:/dev/${fds[i]}" "$@"
+	local i j fds
+	fds="stdin stdout stderr"
+	j=0
+	for i in $fds; do
+		realpath -e "/proc/self/fd/$j" >/dev/null 2>&1 && set -- "--bind=/proc/self/fd/$j:/dev/${i}" "$@"
+		j=$((j + 1))
 	done
-	unset i fds
+	unset i j fds
 
 	# Ensure that we can bind fake /proc and /sys entries.
 	setup_fake_sysdata
@@ -2020,9 +2044,9 @@ command_login() {
 			[ ! -d "$data_dir" ] && continue
 			local dir_mode
 			dir_mode=$(stat -c '%a' "$data_dir")
-			if [[ ${dir_mode:2} =~ ^[157]$ ]]; then
-				set -- "--bind=${data_dir}" "$@"
-			fi
+			case "${dir_mode:2}" in
+				1|5|7) set -- "--bind=${data_dir}" "$@" ;;
+			esac
 		done
 		unset data_dir
 
@@ -2082,9 +2106,9 @@ command_login() {
 			if [ -d "$system_mnt" ]; then
 				local dir_mode
 				dir_mode=$(stat -c '%a' "$system_mnt")
-				if [[ ${dir_mode:2} =~ ^[157]$ ]]; then
-					set -- "--bind=${system_mnt}" "$@"
-				fi
+				case "${dir_mode:2}" in
+					1|5|7) set -- "--bind=${system_mnt}" "$@" ;;
+				esac
 			elif [ -f "$system_mnt" ]; then
 				if head -c 1 "$system_mnt" >/dev/null 2>&1; then
 					set -- "--bind=${system_mnt}" "$@"
@@ -2108,6 +2132,7 @@ command_login() {
 		set -- "-p" "$@"
 	fi
 
+	export PROOT_NO_SECCOMP=1
 	exec proot "$@"
 }
 
@@ -2210,7 +2235,7 @@ command_login_help() {
 command_list() {
 	local verbose=false
 
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			-h|--help)
 				command_list_help
@@ -2236,7 +2261,7 @@ command_list() {
 	done
 
 	msg
-	if [ -z "${!SUPPORTED_DISTRIBUTIONS[*]}" ]; then
+	if [ -z "$_DISTRO_KEYS" ]; then
 		msg "${YELLOW}No distribution plug-ins found.${RST}"
 		msg
 		msg "${YELLOW}Please check the directory '${DISTRO_PLUGINS_DIR}' and create at least one distribution plug-in.${RST}"
@@ -2249,10 +2274,11 @@ command_list() {
 		fi
 
 		local i
-		for i in $(echo "${!SUPPORTED_DISTRIBUTIONS[@]}" | tr ' ' '\n' | sort -d); do
+		for i in $(echo "$_DISTRO_KEYS" | tr ' ' '\n' | sort -d); do
+			[ -z "$i" ] && continue
 			if $verbose; then
 				msg
-				msg "  ${CYAN}* ${YELLOW}${SUPPORTED_DISTRIBUTIONS[$i]}${RST}"
+				msg "  ${CYAN}* ${YELLOW}$(_get_distro_name "$i")${RST}"
 				msg
 				msg "    ${CYAN}Alias: ${GREEN}${i}${RST}"
 				if [ -d "${INSTALLED_ROOTFS_DIR}/${i}" ]; then
@@ -2260,22 +2286,22 @@ command_list() {
 				else
 					msg "    ${CYAN}Installed: ${RED}no${RST}"
 				fi
-				if [ -n "${SUPPORTED_DISTRIBUTIONS_COMMENTS["${i}"]+x}" ]; then
-					msg "    ${CYAN}Comment: ${SUPPORTED_DISTRIBUTIONS_COMMENTS["${i}"]}${RST}"
+				if _has_distro_comment "$i"; then
+					msg "    ${CYAN}Comment: $(_get_distro_comment "$i")${RST}"
 				fi
 
 				local supported_cpus
 				if [ -f "${DISTRO_PLUGINS_DIR}/${i}.sh" ]; then
-					supported_cpus=$(source "${DISTRO_PLUGINS_DIR}/${i}.sh"; echo "${!TARBALL_URL[@]}")
+					supported_cpus=$(grep -oE 'TARBALL_URL_[a-zA-Z0-9_]+=' "${DISTRO_PLUGINS_DIR}/${i}.sh" 2>/dev/null | sed 's/TARBALL_URL_//;s/=//' | tr '\n' ' ')
 				elif [ -f "${DISTRO_PLUGINS_DIR}/${i}.override.sh" ]; then
-					supported_cpus=$(source "${DISTRO_PLUGINS_DIR}/${i}.override.sh"; echo "${!TARBALL_URL[@]}")
+					supported_cpus=$(grep -oE 'TARBALL_URL_[a-zA-Z0-9_]+=' "${DISTRO_PLUGINS_DIR}/${i}.override.sh" 2>/dev/null | sed 's/TARBALL_URL_//;s/=//' | tr '\n' ' ')
 				else
 					supported_cpus="no data"
 				fi
 
 				msg "    ${CYAN}Architectures: ${supported_cpus// /, }${RST}"
 			else
-				msg "  ${CYAN}* ${YELLOW}${SUPPORTED_DISTRIBUTIONS[$i]} ${GREEN}< $i >${RST}"
+				msg "  ${CYAN}* ${YELLOW}$(_get_distro_name "$i") ${GREEN}< $i >${RST}"
 			fi
 		done
 
@@ -2316,7 +2342,7 @@ command_backup() {
 	local distro_name
 	local tarball_file_path
 
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			-h|--help)
 				command_backup_help
@@ -2374,7 +2400,7 @@ command_backup() {
 		return 1
 	fi
 
-	if [ -z "${SUPPORTED_DISTRIBUTIONS["$distro_name"]+x}" ]; then
+	if ! _has_distro "$distro_name"; then
 		msg
 		msg "${BRED}Error: unknown distribution '${YELLOW}${distro_name}${BRED}' was requested for backup.${RST}"
 		msg
@@ -2390,7 +2416,7 @@ command_backup() {
 		return 1
 	fi
 
-	msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Backing up ${YELLOW}${SUPPORTED_DISTRIBUTIONS["$distro_name"]}${CYAN}...${RST}"
+	msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Backing up ${YELLOW}$(_get_distro_name "$distro_name")${CYAN}...${RST}"
 
 	if [ -z "${tarball_file_path-}" ]; then
 		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Tarball will be written to stdout.${RST}"
@@ -2501,7 +2527,7 @@ command_backup_help() {
 command_restore() {
 	local tarball_file_path
 
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			-h|--help)
 				command_restore_help
@@ -2622,7 +2648,7 @@ command_restore_help() {
 #############################################################################
 
 command_clear_cache() {
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			-h|--help)
 				command_clear_cache_help
@@ -2652,10 +2678,10 @@ command_clear_cache() {
 		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Clearing cache files...${RST}"
 
 		local filename
-		while read -r filename; do
+		find "${DOWNLOAD_CACHE_DIR}" -type f | while read -r filename; do
 			msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Deleting ${CYAN}'${filename}'${RST}"
 			rm -f "${filename}"
-		done < <(find "${DOWNLOAD_CACHE_DIR}" -type f)
+		done
 
 		msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Reclaimed ${size_of_cache} of disk space.${RST}"
 	fi
@@ -2694,7 +2720,7 @@ command_copy() {
 	local verbose=false
 	local mv_mode=false
 
-	while (($# >= 1)); do
+	while [ $# -ge 1 ]; do
 		case "$1" in
 			-h|--help)
 				command_copy_help
@@ -2989,7 +3015,9 @@ fi
 declare -A TARBALL_URL TARBALL_SHA256
 declare -A SUPPORTED_DISTRIBUTIONS
 declare -A SUPPORTED_DISTRIBUTIONS_COMMENTS
-while read -r filename; do
+for filename in "$DISTRO_PLUGINS_DIR"/*.sh; do
+	[ -e "$filename" ] || continue
+	[ -L "$filename" ] || [ -f "$filename" ] || continue
 	# shellcheck disable=SC1090
 	distro_name=$(. "$filename"; echo "${DISTRO_NAME-}")
 	# shellcheck disable=SC1090
@@ -3011,9 +3039,9 @@ while read -r filename; do
 		exit 1
 	fi
 
-	SUPPORTED_DISTRIBUTIONS["$distro_alias"]="$distro_name"
-	[ -n "$distro_comment" ] && SUPPORTED_DISTRIBUTIONS_COMMENTS["$distro_alias"]="$distro_comment"
-done < <(find "$DISTRO_PLUGINS_DIR" -maxdepth 1 \( -type f -o -type l \) -iname "*.sh" 2>/dev/null)
+	SUPPORTED_DISTRIBUTIONS[$distro_alias]="$distro_name"
+	[ -n "$distro_comment" ] && SUPPORTED_DISTRIBUTIONS_COMMENTS[$distro_alias]="$distro_comment"
+done
 unset distro_name distro_alias
 
 if [ $# -ge 1 ]; then
