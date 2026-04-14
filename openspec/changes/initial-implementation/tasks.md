@@ -330,31 +330,107 @@
   - Verify /sdcard, /system, /vendor are NOT accessible
   - Verify /usr, /bin, /etc are accessible
 
-## Phase 6 — Polish & Documentation
+## Phase 6 — Port proot-distro.sh to mksh (POSIX sh)
 
-- [ ] **T6.1** Rootfs mirror setup
+Android's `untrusted_app` SELinux domain blocks `execve()` of binaries in
+app-writable directories. The app process can only exec `/system/bin/sh` (mksh
+R59 2020/10/31). Bash in nativeLibraryDir works from `run-as` (which uses
+`runas_app` context) but is killed with SIGSYS (exit 159) when exec'd from the
+app process via ProcessBuilder.
+
+**Goal:** Make proot-distro.sh fully compatible with mksh R59 so it can be
+invoked as `/system/bin/sh proot-distro.sh ...` from the app process.
+
+**Key mksh R59 limitations discovered:**
+- No `typeset -A` / `declare -A` (associative arrays) — silently corrupts data
+- No `mapfile` / `readarray`
+- No process substitution `< <(...)`
+- No `${!var}` indirect expansion
+- No `[[ =~ ]]` regex match
+- No `local -a` (use plain `local`)
+- Here-docs with command substitution need writable `TMPDIR`
+- Plugin array keys must NOT be quoted: `x[aarch64]` OK, `x['aarch64']` NOT OK
+- mksh parses the ENTIRE script before executing — bash-isms in `command_login()`
+  break `command_install()` too
+
+- [ ] **T6.1** Replace associative arrays with flat variables
+  - Plugins already use flat naming: `TARBALL_URL_aarch64="..."` (done)
+  - Add helper functions for key-value access via `eval`:
+    ```
+    _get_distro_name()  — eval-based lookup of SUPPORTED_DISTRIBUTIONS__<alias>
+    _has_distro()       — existence check via eval
+    _get_tarball_url()  — eval-based lookup of TARBALL_URL_<arch>
+    _get_tarball_sha256() — eval-based lookup of TARBALL_SHA256_<arch>
+    _set_tarball_url()  — eval-based assignment
+    _set_tarball_sha256() — eval-based assignment
+    ```
+  - Track distro key list in `_DISTRO_KEYS` string variable
+  - Replace ALL `${SUPPORTED_DISTRIBUTIONS[$var]}` with helper calls
+  - Replace ALL `${TARBALL_URL[$DISTRO_ARCH]}` with helper calls
+  - Replace ALL `${TARBALL_SHA256[$DISTRO_ARCH]}` with helper calls
+  - Replace ALL `[ -z "${SUPPORTED_DISTRIBUTIONS[$var]+x}" ]` with `_has_distro`
+
+- [ ] **T6.2** Fix remaining mksh incompatibilities in proot-distro.sh
+  - `${!var}` indirect expansion → `eval "_val=\${$var}"` (done for 3 blocks)
+  - `mapfile` in command_login() → temp file + while-read loop (done)
+  - `< <(...)` process substitution → pipeline or for-glob (done for 3 sites)
+  - `[[ =~ ]]` regex → `case` statement (done for 2 sites)
+  - `local -a` → `local` (done for 2 sites)
+  - `declare -f -F` → `type funcname >/dev/null 2>&1`
+  - `${!SUPPORTED_DISTRIBUTIONS[*]}` → check `$_DISTRO_KEYS`
+  - `${!SUPPORTED_DISTRIBUTIONS[@]}` iteration → iterate `$_DISTRO_KEYS`
+  - `${!TARBALL_URL[@]}` in sourced plugins → grep plugin file for patterns
+
+- [ ] **T6.3** Update plugin loading for flat variables
+  - Plugin sourcing must handle `TARBALL_URL_aarch64="..."` (already done)
+  - Remove `declare -A` from plugin loading section
+  - Ensure sourced plugins' flat variables are accessible in parent scope
+
+- [ ] **T6.4** Test proot-distro.sh under mksh R59 on device
+  - Verify `proot-distro list` shows correct distro names and architectures
+  - Verify `proot-distro install alpine` completes (download + extract)
+  - Verify `proot-distro login alpine` enters shell
+  - Verify `proot-distro remove alpine` cleans up
+  - Test via `run-as id.or.oo.pr /system/bin/sh proot-distro.sh ...`
+
+- [ ] **T6.5** Test install from app UI via ProcessBuilder
+  - ProcessBuilder runs `/system/bin/sh proot-distro.sh install alpine`
+  - Verify no SIGSYS / exit code 159
+  - Verify download succeeds (app has network access)
+  - Verify extraction completes
+  - Verify Alpine appears as "Installed" in UI
+
+- [ ] **T6.6** Test login from app UI
+  - ProotLauncher starts PTY session
+  - Verify proot runs without seccomp SIGSYS (patched binary)
+  - Verify interactive shell works
+  - Verify `apk update && apk add vim` works inside Alpine
+
+## Phase 7 — Polish & Documentation
+
+- [ ] **T7.1** Rootfs mirror setup
   - Configure pr.oo.or.id/dl/rootfs/ as fallback mirror
   - Add mirror URL configuration to app settings
 
-- [ ] **T6.2** Error handling
+- [ ] **T7.2** Error handling
   - Handle download failures gracefully
   - Handle extraction failures (clean up partial rootfs)
   - Handle proot crash (inform user)
   - Handle SELinux ptrace denial (show explanatory message)
 
-- [ ] **T6.3** README and user documentation
+- [ ] **T7.3** README and user documentation
   - Write README.md for github.com/oonid/pr
   - Include project name explanation: pr = PRoot = ptrace-based root (see docs/name.md)
   - Document supported devices and known limitations
   - Document how to add custom distro plugins
   - Document how to build from source
 
-- [ ] **T6.4** CI/CD setup
+- [ ] **T7.4** CI/CD setup
   - GitHub Actions workflow for building proot binary
   - GitHub Actions workflow for building APK
   - Release automation
 
-- [ ] **T6.5** App signing and release
+- [ ] **T7.5** App signing and release
   - Generate signing key
   - Configure release build type
   - Create first release APK

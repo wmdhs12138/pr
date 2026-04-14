@@ -92,10 +92,9 @@ int launch_process(Tracee *tracee, char *const argv[])
 		 * does the same thing. */
 		kill(getpid(), SIGSTOP);
 
-		/* Improve performance by using seccomp mode 2, unless
-		 * this support is explicitly disabled.  */
-		if (getenv("PROOT_NO_SECCOMP") == NULL)
-			(void) enable_syscall_filtering(tracee);
+		/* Seccomp disabled: Android zygote seccomp filter conflicts
+		 * with proot's BPF filter, causing SIGSYS on app processes. */
+		(void) tracee;
 
 		/* Now process is ptraced, so the current rootfs is already the
 		 * guest rootfs.  Note: Valgrind can't handle execve(2) on

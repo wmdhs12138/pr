@@ -17,7 +17,7 @@ class App : Application() {
         private const val KEY_INITIALIZED = "bootstrapped"
         private const val KEY_VERSION = "bootstrap_version"
 
-        private const val BOOTSTRAP_VERSION = 3
+        private const val BOOTSTRAP_VERSION = 5
     }
 
     val prefixDir: File
@@ -99,6 +99,8 @@ class App : Application() {
             if (link.exists()) {
                 val currentTarget = link.canonicalPath
                 if (currentTarget == target.canonicalPath) continue
+                link.delete()
+            } else if (java.nio.file.Files.isSymbolicLink(link.toPath())) {
                 link.delete()
             }
 

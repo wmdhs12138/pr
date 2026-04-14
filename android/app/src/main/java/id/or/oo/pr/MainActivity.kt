@@ -2,6 +2,7 @@ package id.or.oo.pr
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -258,33 +259,54 @@ private fun parsePluginName(pluginFile: File): String? {
 }
 
 private suspend fun runDistroCommand(app: App, command: String, onLine: (String) -> Unit) = withContext(Dispatchers.IO) {
-    val launcher = ProotLauncher(app)
-    val session = launcher.runCommand("proot-distro $command") ?: run {
-        withContext(Dispatchers.Main) { onLine("ERROR: Failed to start session") }
-        return@withContext
-    }
+    val binDir = File(app.prefixDir, "bin")
+    val script = File(app.prefixDir, "scripts/proot-distro.sh").absolutePath
+
+    val env = mapOf(
+        "APP_PREFIX" to app.prefixDir.absolutePath,
+        "APP_HOME" to app.homeDir.absolutePath,
+        "APP_PACKAGE" to app.packageName,
+        "PATH" to "${binDir.absolutePath}:/system/bin:/system/xbin",
+        "PROOT_NO_SECCOMP" to "1",
+        "HOME" to app.homeDir.absolutePath,
+        "TERM" to "xterm-256color",
+        "TMPDIR" to app.cacheDir.absolutePath,
+    )
+
+    val cmd = arrayOf("/system/bin/sh", script, *command.split(" ").toTypedArray())
+
+    android.util.Log.d("PR", "Running: ${cmd.joinToString(" ")}")
+    val pb = ProcessBuilder(*cmd)
+    pb.environment().putAll(env)
+    pb.redirectErrorStream(true)
 
     try {
-        val buf = ByteArray(4096)
-        while (!session.closed) {
-            val n = session.read(buf)
-            if (n < 0) break
-            if (n > 0) {
-                val raw = String(buf, 0, n)
-                val cleaned = raw
-                    .replace(Regex("\r\\x1B\\[[0-9;]*K"), "")
-                    .replace(Regex("\r[^\n]"), "")
-                    .replace(Regex("\\x1B\\[[0-9;]*[mGKHJ]"), "")
-                    .trim()
-                if (cleaned.isNotEmpty()) {
-                    withContext(Dispatchers.Main) {
-                        cleaned.lines().filter { it.isNotBlank() }.forEach { onLine(it) }
-                    }
-                }
+        val proc = pb.start()
+        val reader = proc.inputStream.bufferedReader()
+        var line: String? = reader.readLine()
+        while (line != null) {
+            val cleaned = line
+                .replace(Regex("\\x1B\\[[0-9;]*[mGKHJ]"), "")
+                .replace(Regex("\\x1B\\]\\d+;.*?\\x07"), "")
+                .replace(Regex("\r"), "")
+                .trim()
+            if (cleaned.isNotEmpty()) {
+                val finalLine = cleaned
+                android.util.Log.d("PR", finalLine)
+                withContext(Dispatchers.Main) { onLine(finalLine) }
+            }
+            line = reader.readLine()
+        }
+        val exitCode = proc.waitFor()
+        android.util.Log.d("PR", "Exit code: $exitCode")
+        withContext(Dispatchers.Main) {
+            if (exitCode != 0) {
+                onLine("Exit code: $exitCode")
+            } else {
+                onLine("Done.")
             }
         }
-    } catch (_: Exception) {
-    } finally {
-        session.close()
+    } catch (e: Exception) {
+        withContext(Dispatchers.Main) { onLine("ERROR: ${e.message}") }
     }
 }

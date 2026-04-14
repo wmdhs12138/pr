@@ -113,7 +113,12 @@ Java_id_or_oo_pr_PtyNative_nativeForkPty(
             execl(cmd, cmd, NULL);
         }
 
-        LOGE("execv failed: %s", strerror(errno));
+        {
+            char errbuf[256];
+            int n = snprintf(errbuf, sizeof(errbuf),
+                "execv failed for '%s': %s (errno=%d)\n", cmd, strerror(errno), errno);
+            write(STDERR_FILENO, errbuf, n);
+        }
         _exit(127);
     }
 

@@ -30,9 +30,9 @@ class ProotLauncher(private val app: App) {
 
         val envVars = buildEnvVars()
         val loginCmd = "${script.absolutePath} login $distroName --user $user"
-        val args = arrayOf(bashPath, "-c", loginCmd)
+        val args = arrayOf("sh", "-c", "$bashPath -c '$loginCmd'")
 
-        val masterFd = PtyNative.forkPty(bashPath, args, envVars, rows, cols)
+        val masterFd = PtyNative.forkPty("/system/bin/sh", args, envVars, rows, cols)
         if (masterFd < 0) {
             Log.e(TAG, "forkPty failed with fd=$masterFd")
             return null
@@ -49,10 +49,10 @@ class ProotLauncher(private val app: App) {
     ): Session? {
         val script = File(prefixDir, "scripts/proot-distro.sh")
         val envVars = buildEnvVars()
-        val fullCommand = "source '${script.absolutePath}' 2>/dev/null; $command"
-        val args = arrayOf(bashPath, "-c", fullCommand)
+        val fullCommand = "$bashPath -c 'source ${script.absolutePath} 2>/dev/null; $command'"
+        val args = arrayOf("sh", "-c", fullCommand)
 
-        val masterFd = PtyNative.forkPty(bashPath, args, envVars, rows, cols)
+        val masterFd = PtyNative.forkPty("/system/bin/sh", args, envVars, rows, cols)
         if (masterFd < 0) {
             Log.e(TAG, "forkPty failed for command: $command")
             return null
