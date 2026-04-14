@@ -1,27 +1,29 @@
 #!/bin/bash
-# Push test environment to device and optionally run commands
+# Push test environment to device using bootstrap.sh
 #
 # Usage:
-#   ./build/test-push.sh              # Push all files
-#   ./build/test-push.sh setup        # Push + run setup
-#   ./build/test-push.sh test         # Push + setup + run tests
-#   ./build/test-push.sh shell        # Push + setup + interactive shell
+#   ./test-push.sh              # Push files only
+#   ./test-push.sh setup        # Push + run bootstrap
+#   ./test-push.sh test         # Push + bootstrap + proot-distro list
+#   ./test-push.sh shell        # Push + bootstrap + interactive shell
 #
 # Prerequisites:
 #   - adb in PATH, device connected
-#   - proot built (./build.sh)
-#   - busybox-static extracted (tar xzf build/test-binaries/busybox-static.apk -C build/test-binaries/extracted/)
+#   - proot built:     ./build.sh --arch=arm64
+#   - busybox ready:   ./download-busybox.sh
+#   - bash ready:      ./download-bash.sh
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BB_EXTRACTED="${PROJECT_DIR}/build/test-binaries/extracted/bin/busybox.static"
-BASH_STATIC="${PROJECT_DIR}/build/test-binaries/bash-static"
-PROOT="${PROJECT_DIR}/build/out/arm64/proot"
-PDISTRO="${PROJECT_DIR}/src/scripts/proot-distro.sh"
-PLUGINS="${PROJECT_DIR}/src/scripts/plugins"
-SETUP="${PROJECT_DIR}/build/test-setup.sh"
+PROOT="${SCRIPT_DIR}/build/out/arm64/proot"
+BB="${SCRIPT_DIR}/build/assets/arm64-v8a/busybox"
+BASH="${SCRIPT_DIR}/build/assets/arm64-v8a/bash"
+PDISTRO="${SCRIPT_DIR}/src/scripts/proot-distro.sh"
+BOOTSTRAP="${SCRIPT_DIR}/src/scripts/bootstrap.sh"
+PLUGINS="${SCRIPT_DIR}/src/scripts/plugins"
+
+DEVICE_PREFIX="/data/local/tmp/pr-test/usr"
 
 check_file() {
     if [ ! -f "$1" ]; then
@@ -31,73 +33,67 @@ check_file() {
     fi
 }
 
-check_file "$PROOT" "proot binary" "Run: ./build.sh"
-check_file "$BB_EXTRACTED" "busybox-static" "Run: tar xzf build/test-binaries/busybox-static.apk -C build/test-binaries/extracted/"
-check_file "$BASH_STATIC" "static bash" "Run: curl -fSL -o build/test-binaries/bash-static https://github.com/robxu9/bash-static/releases/download/5.2.015-1.2.3-2/bash-linux-aarch64"
+check_file "$PROOT" "proot binary" "Run: ./build.sh --arch=arm64"
+check_file "$BB" "busybox" "Run: ./download-busybox.sh"
+check_file "$BASH" "bash" "Run: ./download-bash.sh"
 check_file "$PDISTRO" "proot-distro.sh" ""
-check_file "$SETUP" "test-setup.sh" ""
+check_file "$BOOTSTRAP" "bootstrap.sh" ""
 
 echo "=== Pushing files to device ==="
 
-echo "Pushing proot..."
-adb push "$PROOT" /data/local/tmp/proot
+echo "Pushing binaries..."
+adb push "$PROOT" "${DEVICE_PREFIX}/bin/proot"
+adb push "$BB" "${DEVICE_PREFIX}/bin/busybox"
+adb push "$BASH" "${DEVICE_PREFIX}/bin/bash"
 
-echo "Pushing busybox-static..."
-adb push "$BB_EXTRACTED" /data/local/tmp/busybox.static
-
-echo "Pushing bash-static..."
-adb push "$BASH_STATIC" /data/local/tmp/bash-static
-
-echo "Pushing proot-distro.sh..."
-adb push "$PDISTRO" /data/local/tmp/proot-distro.sh
+echo "Pushing scripts..."
+adb push "$BOOTSTRAP" "${DEVICE_PREFIX}/bin/bootstrap.sh"
+adb push "$PDISTRO" "${DEVICE_PREFIX}/scripts/proot-distro.sh"
 
 echo "Pushing plugins..."
-adb shell rm -rf /data/local/tmp/plugins
-adb push "$PLUGINS" /data/local/tmp/plugins
-
-echo "Pushing test-setup.sh..."
-adb push "$SETUP" /data/local/tmp/test-setup.sh
+adb shell rm -rf "${DEVICE_PREFIX}/plugins"
+adb push "$PLUGINS" "${DEVICE_PREFIX}/plugins"
 
 echo ""
 echo "=== Push complete ==="
 
 ACTION="${1:-}"
 
+ENV_EXPORTS="export PATH=${DEVICE_PREFIX}/bin APP_PREFIX=${DEVICE_PREFIX} APP_HOME=/data/local/tmp/pr-test/home APP_PACKAGE=id.or.oo.pr PROOT_NO_SECCOMP=1"
+
 case "$ACTION" in
     setup)
         echo ""
-        echo "=== Running setup on device ==="
-        adb shell sh /data/local/tmp/test-setup.sh
+        echo "=== Running bootstrap ==="
+        adb shell "rm -f ${DEVICE_PREFIX}/.bootstrapped"
+        adb shell "APP_PREFIX=${DEVICE_PREFIX} APP_HOME=/data/local/tmp/pr-test/home APP_PACKAGE=id.or.oo.pr sh ${DEVICE_PREFIX}/bin/bootstrap.sh"
         ;;
     test)
         echo ""
-        echo "=== Running setup on device ==="
-        adb shell sh /data/local/tmp/test-setup.sh
+        echo "=== Running bootstrap ==="
+        adb shell "rm -f ${DEVICE_PREFIX}/.bootstrapped"
+        adb shell "APP_PREFIX=${DEVICE_PREFIX} APP_HOME=/data/local/tmp/pr-test/home APP_PACKAGE=id.or.oo.pr sh ${DEVICE_PREFIX}/bin/bootstrap.sh"
         echo ""
         echo "=== Running proot-distro list ==="
-        adb shell "export PATH=/data/local/tmp/pr-test/usr/bin && export APP_PREFIX=/data/local/tmp/pr-test/usr && export APP_HOME=/data/local/tmp/pr-test/home && export APP_PACKAGE=id.or.oo.pr && export PROOT_NO_SECCOMP=1 && proot-distro list"
+        adb shell "${ENV_EXPORTS} && proot-distro list"
         ;;
     shell)
         echo ""
-        echo "=== Running setup on device ==="
-        adb shell sh /data/local/tmp/test-setup.sh
+        echo "=== Running bootstrap ==="
+        adb shell "rm -f ${DEVICE_PREFIX}/.bootstrapped"
+        adb shell "APP_PREFIX=${DEVICE_PREFIX} APP_HOME=/data/local/tmp/pr-test/home APP_PACKAGE=id.or.oo.pr sh ${DEVICE_PREFIX}/bin/bootstrap.sh"
         echo ""
         echo "=== Starting interactive shell ==="
-        echo "Run: proot-distro list"
-        adb shell "export PATH=/data/local/tmp/pr-test/usr/bin && export APP_PREFIX=/data/local/tmp/pr-test/usr && export APP_HOME=/data/local/tmp/pr-test/home && export APP_PACKAGE=id.or.oo.pr && export PROOT_NO_SECCOMP=1 && bash"
+        adb shell "${ENV_EXPORTS} && bash"
         ;;
     *)
         echo ""
         echo "To continue:"
-        echo "  adb shell sh /data/local/tmp/test-setup.sh"
+        echo "  adb shell 'rm -f ${DEVICE_PREFIX}/.bootstrapped && APP_PREFIX=${DEVICE_PREFIX} sh ${DEVICE_PREFIX}/bin/bootstrap.sh'"
         echo ""
         echo "Then test:"
         echo "  adb shell"
-        echo "  export PATH=/data/local/tmp/pr-test/usr/bin"
-        echo "  export APP_PREFIX=/data/local/tmp/pr-test/usr"
-        echo "  export APP_HOME=/data/local/tmp/pr-test/home"
-        echo "  export APP_PACKAGE=id.or.oo.pr"
-        echo "  export PROOT_NO_SECCOMP=1"
+        echo "  ${ENV_EXPORTS}"
         echo "  proot-distro list"
         ;;
 esac

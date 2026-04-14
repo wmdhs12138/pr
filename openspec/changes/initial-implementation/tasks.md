@@ -191,11 +191,17 @@
   - Verified on-device in T2.10 (associative arrays, mapfile, [[ ]], etc.)
   - License: GPL-3.0-or-later
 
-- [ ] **T3.3** Create bootstrap function
-  - Copy busybox to `${APP_PREFIX}/bin/busybox`
-  - Copy bash to `${APP_PREFIX}/bin/bash`
-  - `chmod 755` both
-  - Create applet symlinks via `busybox --install -s ${APP_PREFIX}/bin/`
+- [x] **T3.3** Create bootstrap script
+  - Created src/scripts/bootstrap.sh (POSIX sh, no bash dependency)
+  - Creates directory structure: bin, etc/proot-distro, var/lib/proot-distro, home, tmp, scripts
+  - Installs busybox + creates 311 applet symlinks via busybox --list
+  - Installs bash (overwrites busybox's bash symlink with real static bash)
+  - Installs proot binary
+  - Copies proot-distro.sh to bin/proot-distro, replaces @APP_PREFIX@ shebang template
+  - Copies distro plugins from plugins/ to etc/proot-distro/
+  - Idempotent: skips if .bootstrapped marker file exists
+  - Updated test-push.sh to use bootstrap.sh flow with build/assets/ binaries
+  - Verified on device: all commands work end-to-end (list, install, login, remove)
 
 - [ ] **T3.4** Verify tar compatibility
   - Test extraction of .tar.xz, .tar.gz, .tar.bz2 rootfs tarballs
