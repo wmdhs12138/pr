@@ -247,24 +247,32 @@
   - Idempotent via SharedPreferences bootstrap_version (increment to re-bootstrap)
   - APK verified: 15MB with all assets + native lib bundled
 
-- [ ] **T4.3** Implement MainActivity
-  - List available distros (read plugin files)
-  - Show install status for each
-  - Install button → async install via proot-distro.sh
-  - Login button → launch TerminalActivity
-  - Remove button → confirm dialog → async remove
+- [x] **T4.3** Implement MainActivity
+  - Compose-based UI with Material3 theme
+  - Reads plugin files from files/usr/etc/proot-distro/ to list distros
+  - Checks files/usr/var/lib/proot-distro/installed-rootfs/ for install status
+  - Install button → async install via proot-distro.sh with live output view
+  - Login button → launches TerminalActivity with distro name
+  - Remove button → async remove via proot-distro.sh with live output view
+  - Parses DISTRO_NAME from plugin .sh files for display names
+  - Uses coroutines for background I/O (Dispatchers.IO)
 
-- [ ] **T4.4** Implement TerminalActivity
-  - Embed terminal emulator View
-  - Launch proot-distro.sh login via ProcessBuilder
-  - Wire process I/O to terminal
-  - Handle terminal resize
-  - Handle process exit
+- [x] **T4.4** Implement TerminalActivity
+  - Uses ConnectBot termlib Terminal() composable for terminal rendering
+  - Creates TerminalEmulator via TerminalEmulatorFactory.create()
+  - PTY reader thread reads master fd → feeds to emulator.writeInput()
+  - onKeyboardInput callback writes to PTY master fd
+  - Dark theme: background #1a1a2e, foreground white, font 12sp
+  - Handles back press → cleanup and finish
+  - Lifecycle: cleanup on destroy
 
-- [ ] **T4.5** Implement ProotLauncher
-  - Construct environment variables
-  - Build command line
-  - Execute process and return to caller
+- [x] **T4.5** Implement ProotLauncher
+  - PtyNative JNI shim: fork/exec with PTY via /dev/ptmx
+  - ptyjni.c (~180 lines C): forkPty, read, write, resize, close, getPid, waitPid
+  - ProotLauncher.startSession(): forks bash + proot-distro.sh login with PTY
+  - ProotLauncher.runCommand(): forks bash -c for install/remove commands
+  - Environment: APP_PREFIX, APP_HOME, APP_PACKAGE, PROOT_NO_SECCOMP=1, TERM=xterm-256color
+  - Session class wraps master fd with read/write/resize/close operations
 
 - [x] **T4.6** Bundle proot as native library
   - Placed at `app/src/main/jniLibs/arm64-v8a/libproot.so` (2.5MB)

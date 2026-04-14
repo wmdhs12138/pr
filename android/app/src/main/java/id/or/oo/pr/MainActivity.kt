@@ -1,11 +1,270 @@
 package id.or.oo.pr
 
+import android.content.Intent
 import android.os.Bundle
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
-class MainActivity : AppCompatActivity() {
+data class DistroInfo(
+    val name: String,
+    val displayName: String,
+    val isInstalled: Boolean,
+)
+
+class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        val app = application as App
+        setContent {
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    DistroListScreen(app)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DistroListScreen(app: App) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var distros by remember { mutableStateOf<List<DistroInfo>>(emptyList()) }
+    var loadingDistro by remember { mutableStateOf<String?>(null) }
+    var outputText by remember { mutableStateOf("") }
+    var showOutput by remember { mutableStateOf(false) }
+
+    fun refreshDistros() {
+        val pluginsDir = File(app.prefixDir, "etc/proot-distro")
+        val rootfsDir = File(app.prefixDir, "var/lib/proot-distro/installed-rootfs")
+
+        val plugins = pluginsDir.listFiles { f -> f.name.endsWith(".sh") }
+            ?.map { f ->
+                val distroName = f.nameWithoutExtension
+                val displayName = parsePluginName(f) ?: distroName.replaceFirstChar { it.uppercase() }
+                val isInstalled = File(rootfsDir, distroName).exists()
+                DistroInfo(distroName, displayName, isInstalled)
+            }
+            ?.sortedBy { it.displayName }
+            ?: emptyList()
+
+        distros = plugins
+    }
+
+    LaunchedEffect(Unit) { refreshDistros() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("PR") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                )
+            )
+        }
+    ) { padding ->
+        if (showOutput) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Output", style = MaterialTheme.typography.titleMedium)
+                    TextButton(onClick = {
+                        showOutput = false
+                        outputText = ""
+                        refreshDistros()
+                    }) {
+                        Text("Close")
+                    }
+                }
+                Text(
+                    text = outputText,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                items(distros) { distro ->
+                    DistroRow(
+                        distro = distro,
+                        isLoading = loadingDistro == distro.name,
+                        onInstall = {
+                            if (loadingDistro == null) {
+                                loadingDistro = distro.name
+                                showOutput = true
+                                outputText = "Installing ${distro.displayName}...\n"
+                                scope.launch {
+                                    runDistroCommand(app, "install ${distro.name}") { line ->
+                                        outputText += line + "\n"
+                                    }
+                                    loadingDistro = null
+                                    refreshDistros()
+                                }
+                            }
+                        },
+                        onLogin = {
+                            if (loadingDistro == null) {
+                                val intent = Intent(context, TerminalActivity::class.java)
+                                intent.putExtra("distro", distro.name)
+                                context.startActivity(intent)
+                            }
+                        },
+                        onRemove = {
+                            if (loadingDistro == null) {
+                                loadingDistro = distro.name
+                                showOutput = true
+                                outputText = "Removing ${distro.displayName}...\n"
+                                scope.launch {
+                                    runDistroCommand(app, "remove ${distro.name}") { line ->
+                                        outputText += line + "\n"
+                                    }
+                                    loadingDistro = null
+                                    refreshDistros()
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DistroRow(
+    distro: DistroInfo,
+    isLoading: Boolean,
+    onInstall: () -> Unit,
+    onLogin: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = distro.displayName,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = if (distro.isInstalled) "Installed" else "Not installed",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (distro.isInstalled)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.outline
+                )
+            }
+
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Row {
+                    if (distro.isInstalled) {
+                        IconButton(onClick = onLogin) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Login")
+                        }
+                        IconButton(onClick = onRemove) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Remove",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = onInstall) {
+                            Icon(Icons.Default.Download, contentDescription = "Install")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun parsePluginName(pluginFile: File): String? {
+    try {
+        val lines = pluginFile.readLines()
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("DISTRO_NAME=")) {
+                return trimmed.substringAfter("DISTRO_NAME=").trim('"', '\'')
+            }
+        }
+    } catch (_: Exception) {}
+    return null
+}
+
+private suspend fun runDistroCommand(app: App, command: String, onLine: (String) -> Unit) = withContext(Dispatchers.IO) {
+    val launcher = ProotLauncher(app)
+    val script = File(app.prefixDir, "scripts/proot-distro.sh").absolutePath
+    val session = launcher.runCommand("source $script 2>/dev/null; proot-distro $command") ?: run {
+        onLine("ERROR: Failed to start session")
+        return@withContext
+    }
+
+    try {
+        val buf = ByteArray(4096)
+        while (!session.closed) {
+            val n = session.read(buf)
+            if (n < 0) break
+            if (n > 0) {
+                val text = String(buf, 0, n)
+                withContext(Dispatchers.Main) {
+                    text.lines().forEach { onLine(it) }
+                }
+            }
+        }
+    } catch (_: Exception) {
+    } finally {
+        session.close()
     }
 }
