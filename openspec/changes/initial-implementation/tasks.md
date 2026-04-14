@@ -350,12 +350,22 @@ Cross-compiled via NDK 27 clang + `cargo build --target aarch64-linux-android`.
 
 ### T6.1 — Rust project scaffolding
 
-- [ ] Create `src/pr-cli/` Cargo project with cross-compilation config
-- [ ] `.cargo/config.toml` with NDK 27 linker and static link flags
-- [ ] `Cargo.toml` with dependencies: `clap` (CLI), `sha2` (SHA256), `libc`
-- [ ] `build-pr-cli.sh` script: build, strip, copy to jniLibs
-- [ ] Add `libpr-cli.so` symlink to `App.kt` ensureNativeLibSymlinks()
-- [ ] Bump `BOOTSTRAP_VERSION`
+- [x] Create `src/pr-cli/` Cargo project with cross-compilation config
+- [x] `.cargo/config.toml` with NDK 27 linker and static link flags
+- [x] `Cargo.toml` with dependencies: `clap` (CLI), `sha2` (SHA256), `libc`
+- [x] `build-pr-cli.sh` script: build, strip, copy to jniLibs
+- [x] Add `libpr-cli.so` symlink to `App.kt` ensureNativeLibSymlinks()
+- [x] Bump `BOOTSTRAP_VERSION`
+
+Verified on device (, Android 16, aarch64):
+- `pr-cli --version` → pr-cli 0.1.0 (exit 0)
+- `pr-cli --help` → all 10 subcommands listed
+- `pr-cli list` → stub output (expected)
+- Binary: 731KB static ELF aarch64, bundled as libpr-cli.so in jniLibs
+- Symlink: files/usr/bin/pr-cli → nativeLibraryDir/libpr-cli.so
+- BOOTSTRAP_VERSION bumped 6 → 7
+- Build: cargo build from src/pr-cli/ dir (must cd first for .cargo/config.toml resolution)
+- Fix: removed link-arg=-static (causes host cc invocation), kept target-feature=+crt-static only
 
 ### T6.2 — Plugin config parser
 

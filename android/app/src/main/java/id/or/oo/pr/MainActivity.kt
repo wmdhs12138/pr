@@ -111,6 +111,19 @@ fun DistroListScreen(app: App) {
                                         }
                                     }
                                     withContext(Dispatchers.Main) {
+                                        outputLines = (outputLines + "--- pr-cli --version ---").toMutableList()
+                                    }
+                                    val prCli = File(binDir, "pr-cli")
+                                    runDistroCommand(app, "pr-cli --version", overrideCmd = arrayOf(prCli.absolutePath, "--version")) { line ->
+                                        outputLines = (outputLines + line).toMutableList()
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        outputLines = (outputLines + "--- pr-cli list ---").toMutableList()
+                                    }
+                                    runDistroCommand(app, "pr-cli list", overrideCmd = arrayOf(prCli.absolutePath, "list")) { line ->
+                                        outputLines = (outputLines + line).toMutableList()
+                                    }
+                                    withContext(Dispatchers.Main) {
                                         outputLines = (outputLines + "--- done ---").toMutableList()
                                         loadingDistro = null
                                     }

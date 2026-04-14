@@ -1,0 +1,15 @@
+[package]
+name = "pr-cli"
+version = "0.1.0"
+edition = "2021"
+description = "proot-distro replacement for Android (id.or.oo.pr)"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+libc = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
