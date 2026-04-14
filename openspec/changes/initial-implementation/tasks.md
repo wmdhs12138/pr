@@ -182,10 +182,14 @@
   - All required applets verified on-device in T2.10
   - License: GPL-2.0-only
 
-- [ ] **T3.2** Obtain static bash binary for aarch64
-  - proot-distro.sh requires bash (associative arrays, [[ ]], etc.)
-  - Download pre-built static bash or cross-compile with NDK
-  - ~2MB binary
+- [x] **T3.2** Obtain static bash binary for aarch64
+  - Downloaded robxu9/bash-static v5.2.015 (2.3MB, static aarch64)
+  - SHA256 pinned, reproducible download script
+  - Script: download-bash.sh (same pattern as download-busybox.sh)
+  - Output: build/assets/arm64-v8a/bash (ready for APK bundling)
+  - No PT_TLS segment (no alignment fix needed)
+  - Verified on-device in T2.10 (associative arrays, mapfile, [[ ]], etc.)
+  - License: GPL-3.0-or-later
 
 - [ ] **T3.3** Create bootstrap function
   - Copy busybox to `${APP_PREFIX}/bin/busybox`
