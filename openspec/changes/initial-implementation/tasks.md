@@ -173,9 +173,14 @@
 
 ## Phase 3 — Busybox & Bash Integration
 
-- [ ] **T3.1** Obtain static busybox binary for aarch64
-  - Download pre-built or build from source with NDK
-  - Verify all required applets present: `busybox --list`
+- [x] **T3.1** Obtain static busybox binary for aarch64
+  - Downloaded Alpine busybox-static v1.37.0-r14 (1.1MB, static aarch64)
+  - Pinned package with SHA256 verification of both APK and extracted binary
+  - Script: download-busybox.sh (reproducible, cached downloads)
+  - Output: build/assets/arm64-v8a/busybox (ready for APK bundling)
+  - No PT_TLS segment (no alignment fix needed)
+  - All required applets verified on-device in T2.10
+  - License: GPL-2.0-only
 
 - [ ] **T3.2** Obtain static bash binary for aarch64
   - proot-distro.sh requires bash (associative arrays, [[ ]], etc.)
