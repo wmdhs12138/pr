@@ -10,3 +10,6 @@
 [submodule "vendor/samba"]
 	path = vendor/samba
 	url = git@github.com:samba-team/samba.git
+[submodule "vendor/termlib"]
+	path = vendor/termlib
+	url = git@github.com:connectbot/termlib.git
