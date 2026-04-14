@@ -71,7 +71,7 @@
   - Decision: bundle static bash binary (~2MB) — proot-distro.sh requires bash
     features (declare -A associative arrays, [[ ]] tests, bash string manipulation)
     that busybox ash does not support
-  - Copied 17 distro plugins to `src/scripts/plugins/` (excluded termux.sh)
+  - Copied 14 distro plugins to `src/scripts/plugins/` (excluded termux.sh, oracle.sh, pardus.sh, void.sh)
   - Plugins: alpine, almalinux, archlinux, artix, adelie, chimera, debian,
     deepin, fedora, manjaro, opensuse, oracle, pardus, rockylinux, trisquel,
     ubuntu, void
@@ -204,7 +204,7 @@
   - Verified on device: all commands work end-to-end (list, install, login, remove)
 
 - [x] **T3.4** Verify tar compatibility
-  - All 17 distro plugins use .tar.xz exclusively (no .tar.gz or .tar.bz2 in production)
+  - All 14 distro plugins use .tar.xz exclusively (no .tar.gz or .tar.bz2 in production)
   - Tested busybox tar v1.37.0 extraction of all three formats on device:
     - .tar.xz: OK (files, symlinks, subdirs, --strip, proot --link2symlink wrapper)
     - .tar.gz: OK (files, symlinks, subdirs)
@@ -241,7 +241,7 @@
   - Copies busybox + bash from assets/bin/ to files/usr/bin/
   - Copies proot from nativeLibraryDir (jniLibs/libproot.so) to files/usr/bin/proot
   - Copies bootstrap.sh + proot-distro.sh from assets/scripts/ to files/usr/scripts/
-  - Copies 17 distro plugins from assets/plugins/ to files/usr/etc/proot-distro/
+  - Copies 14 distro plugins from assets/plugins/ to files/usr/etc/proot-distro/
   - Executes bootstrap.sh via /system/bin/sh with env vars (APP_PREFIX, PROOT_NO_SECCOMP=1)
   - bootstrap.sh handles: chmod 755, applet symlinks, shebang template replacement
   - Idempotent via SharedPreferences bootstrap_version (increment to re-bootstrap)
@@ -285,16 +285,18 @@
   - `assets/bin/bash` (2.3MB, from build/assets/arm64-v8a/bash)
   - `assets/scripts/proot-distro.sh` (with @APP_PREFIX@ template)
   - `assets/scripts/bootstrap.sh` (POSIX sh setup script)
-  - `assets/plugins/*.sh` (17 distro plugins)
+  - `assets/plugins/*.sh` (14 distro plugins)
   - Total APK: 15MB (debug, uncompressed)
 
 ## Phase 5 — Distro Plugins & Testing
 
-- [ ] **T5.1** Port distro plugins
-  - Copy alpine.sh, debian.sh, ubuntu.sh, archlinux.sh, fedora.sh
-  - Exclude termux.sh
-  - Verify TARBALL_URLs are accessible
-  - Audit distro_setup() hooks for Termux references
+- [x] **T5.1** Port distro plugins
+  - 14 distro plugins bundled (removed oracle.sh, pardus.sh, void.sh — stale tarball versions)
+  - Excluded termux.sh (not present in our plugin set)
+  - All TARBALL_URLs verified accessible (HTTP 200, easycli.sh host)
+  - Zero Termux references in any plugin — all distro_setup() hooks use standard Linux commands only
+  - 7 plugins have distro_setup(): archlinux, artix, debian, fedora, manjaro, opensuse, trisquel, ubuntu, void
+  - Remaining: adelie, almalinux, alpine, archlinux, artix, chimera, debian, deepin, fedora, manjaro, opensuse, rockylinux, trisquel, ubuntu
 
 - [ ] **T5.2** Integration test: Alpine
   - Install Alpine via app UI
