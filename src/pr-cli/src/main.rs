@@ -1,10 +1,12 @@
 use clap::{Parser, Subcommand};
 use pr_cli::color::*;
 use pr_cli::install::command_install;
+use pr_cli::login::command_login;
 use pr_cli::plugin::load_plugins;
+use pr_cli::shared;
 use std::path::PathBuf;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = shared::VERSION;
 
 #[derive(Parser)]
 #[command(
@@ -68,17 +70,15 @@ enum Commands {
 }
 
 fn get_prefix() -> PathBuf {
-    let prefix = std::env::var("APP_PREFIX")
-        .unwrap_or_else(|_| "/data/data/id.or.oo.pr/files/usr".to_string());
-    PathBuf::from(prefix)
+    PathBuf::from(shared::get_prefix())
 }
 
 fn get_plugins_dir() -> PathBuf {
-    get_prefix().join("etc/proot-distro")
+    PathBuf::from(shared::get_plugins_dir())
 }
 
 fn get_installed_rootfs_dir() -> PathBuf {
-    get_prefix().join("var/lib/proot-distro/installed-rootfs")
+    PathBuf::from(shared::get_installed_rootfs_dir())
 }
 
 fn is_installed(alias: &str) -> bool {
@@ -170,9 +170,19 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Login { distro, .. } => {
-            eprintln!("login: not yet implemented (distro={})", distro);
-            std::process::exit(1);
+        Commands::Login {
+            distro,
+            user,
+            isolated,
+            no_link2symlink,
+            custom_bind,
+        } => {
+            if let Err(e) =
+                command_login(&distro, &user, isolated, no_link2symlink, &custom_bind, &[])
+            {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Remove { distro } => {
             eprintln!("remove: not yet implemented (distro={})", distro);

@@ -5,41 +5,11 @@ use std::process::Command;
 
 use crate::color::*;
 use crate::plugin::load_plugins;
-
-const DEFAULT_PRIMARY_NAMESERVER: &str = "8.8.8.8";
-const DEFAULT_SECONDARY_NAMESERVER: &str = "8.8.4.4";
-const DEFAULT_FAKE_KERNEL_RELEASE: &str = "6.17.0-pr";
-const DEFAULT_FAKE_KERNEL_VERSION: &str = "#1 SMP PREEMPT_DYNAMIC Fri, 10 Oct 2025 00:00:00 +0000";
-
-fn get_prefix() -> String {
-    std::env::var("APP_PREFIX").unwrap_or_else(|_| "/data/data/id.or.oo.pr/files/usr".to_string())
-}
-
-fn get_bin_dir() -> String {
-    format!("{}/bin", get_prefix())
-}
-
-fn get_plugins_dir() -> String {
-    format!("{}/etc/proot-distro", get_prefix())
-}
-
-fn get_installed_rootfs_dir() -> String {
-    format!("{}/var/lib/proot-distro/installed-rootfs", get_prefix())
-}
-
-fn get_download_cache_dir() -> String {
-    format!("{}/var/lib/proot-distro/dlcache", get_prefix())
-}
-
-fn msg_status(text: &str) {
-    println!("{}[{}*{}{}] {}", BLUE, GREEN, BLUE, CYAN, text);
-    println!("{}", RESET);
-}
-
-fn msg_error(text: &str) {
-    println!("{}[{}!{}{}] {}", BLUE, RED, BLUE, CYAN, text);
-    println!("{}", RESET);
-}
+use crate::shared::{
+    get_bin_dir, get_default_path_env, get_download_cache_dir, get_installed_rootfs_dir,
+    get_plugins_dir, get_prefix, msg_error, msg_status, DEFAULT_FAKE_KERNEL_RELEASE,
+    DEFAULT_FAKE_KERNEL_VERSION, DEFAULT_PRIMARY_NAMESERVER, DEFAULT_SECONDARY_NAMESERVER,
+};
 
 fn detect_device_arch() -> String {
     if let Ok(arch) = std::env::var("DISTRO_ARCH") {

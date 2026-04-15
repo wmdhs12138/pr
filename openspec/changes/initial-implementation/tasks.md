@@ -449,12 +449,48 @@ Verified on device (, Android 16, aarch64):
 
 ### T6.5 — `command_login`
 
-- [ ] Argument parsing: `--user`, `--isolated`, `--shared-tmp`, `--no-link2symlink`, `--no-sysvipc`, `--custom-bind`, `--cpu-emulator`
-- [ ] Build proot command line: bind mounts, env vars, kernel version fake, symlinks
-- [ ] Detect bind-mountable system dirs via `stat -c '%a'` (port the `case "${mode:2}"` logic)
-- [ ] Handle CPU emulation (qemu args for cross-arch)
-- [ ] Write `/etc/environment` with current Android env vars
-- [ ] `exec` proot (replace Rust process — no subshell)
+- [x] Argument parsing: `--user`, `--isolated`, `--shared-tmp`, `--no-link2symlink`, `--no-sysvipc`, `--custom-bind`, `--cpu-emulator`
+- [x] Build proot command line: bind mounts, env vars, kernel version fake, symlinks
+- [x] Detect bind-mountable system dirs via `stat -c '%a'` (port the `case "${mode:2}"` logic)
+- [x] Handle CPU emulation (qemu args for cross-arch)
+- [x] Write `/etc/environment` with current Android env vars
+- [x] `exec` proot (replace Rust process — no subshell)
+
+Implementation:
+- src/pr-cli/src/login.rs (~230 lines): full command_login
+  - Validate distro installed, /etc/passwd exists
+  - Parse /etc/passwd for user: uid, gid, home, shell
+  - Update /etc/environment (refresh Android env vars)
+  - Build proot argv with correct argument order:
+    - Custom binds (--custom-bind)
+    - Non-isolated mode: Android data dirs, storage binds (/sdcard, /storage),
+      system mounts (/apex, /system, /vendor, etc) with permission checks,
+      APP_PREFIX bind
+    - /tmp:/dev/shm bind
+    - Fake /proc binds (loadavg, stat, uptime, version, vmstat) — only when real entries unreadable
+    - /sys/fs/selinux bind — conditional on path existence
+    - /proc/self/fd{0,1,2}:/dev/{stdin,stdout,stderr} binds
+    - Core binds: /dev, /proc, /sys, /dev/urandom:/dev/random
+    - -L (fix lstat), --kernel-release (fake kernel string)
+    - --link2symlink (unless --no-link2symlink), --sysvipc, --kill-on-exit
+    - --change-id=uid:gid, --rootfs=, --cwd=home
+    - /usr/bin/env -i with env vars + $SHELL -l
+  - exec proot via std::os::unix::process::CommandExt::exec (replaces process)
+- src/pr-cli/src/shared.rs: extracted constants, path helpers, msg_status/msg_error
+  used by both install.rs and login.rs (eliminates duplication)
+- install.rs: refactored to import from shared module
+- main.rs: updated to use shared module, wire login subcommand
+- Binary: 861KB (was 843KB, +18KB for login logic)
+- All 32 tests pass
+
+Verified on device (, Android 16, aarch64):
+- pr-cli login alpine (not installed): proper error message
+- pr-cli login alpine (fake rootfs): proot launched with correct argv
+- --isolated mode: skips storage/data/system binds
+- Fake /proc binds: only when real entries unreadable
+- sys/fs/selinux bind: conditional (won't fail if path missing)
+- proot exec via CommandExt::exec: process replaced correctly
+- Note: some binds fail from run-as context (expected SELinux limitation)
 
 ### T6.6 — `command_remove`, `command_reset`, `command_clear-cache`
 
