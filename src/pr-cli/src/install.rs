@@ -472,7 +472,7 @@ fn write_config_files(rootfs: &str, distro_name: &str) -> Result<(), String> {
             let bash = get_native_bash();
             let rootfs_dir = rootfs.to_string();
             let setup_script = format!(
-                "source /etc/proot-distro/{}.sh && cd / && distro_setup",
+                "run_proot_cmd() {{ \"$@\"; }} && source /etc/proot-distro/{}.sh && cd / && distro_setup",
                 distro_name
             );
 

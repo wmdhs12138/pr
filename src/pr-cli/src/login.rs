@@ -6,6 +6,7 @@ use std::process::Command;
 
 use crate::shared::*;
 
+#[cfg(target_os = "android")]
 fn android_log(msg: &str) {
     unsafe {
         let c_msg = std::ffi::CString::new(msg).unwrap_or_default();
@@ -14,9 +15,13 @@ fn android_log(msg: &str) {
     }
 }
 
+#[cfg(target_os = "android")]
 extern "C" {
     fn __android_log_write(prio: i32, tag: *const i8, text: *const i8) -> i32;
 }
+
+#[cfg(not(target_os = "android"))]
+fn android_log(_msg: &str) {}
 
 struct PasswdEntry {
     uid: u32,
