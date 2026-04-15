@@ -520,10 +520,36 @@ Verified on device (, Android 16, aarch64):
 
 ### T6.7 — `command_backup`, `command_restore`, `command_rename`, `command_copy`
 
-- [ ] `backup` — tar the rootfs into a backup archive
-- [ ] `restore` — extract backup archive to rootfs
-- [ ] `rename` — rename distro alias, update plugin symlink
-- [ ] `copy` — copy rootfs from one distro to another
+- [x] `backup` — tar the rootfs into a backup archive
+- [x] `restore` — extract backup archive to rootfs
+- [x] `rename` — rename distro alias, update plugin symlink
+- [x] `copy` — copy rootfs from one distro to another
+
+Implementation:
+- src/pr-cli/src/commands_extra.rs (~340 lines total, +200 for T6.7):
+  - command_backup(distro, --output): validate distro installed, fix permissions
+    (chmod_readable_recursive), tar -c rootfs + plugin into output file.
+    Requires --output flag. Cleans up partial file on failure.
+  - command_restore(tarball_path): validate file exists, tar -x with
+    --recursive-unlink --preserve-permissions, extracts plugin + rootfs.
+  - command_rename(old, new): validate both aliases, validate new alias format
+    (alphanumeric + _.+-), rename rootfs dir, create .override.sh plugin with
+    modified DISTRO_NAME (or rename existing override).
+  - command_copy(src, dst): parse distro:path format (e.g. "alpine:/etc/passwd"),
+    resolve paths against installed-rootfs or host filesystem, cp -a via busybox.
+    Handles distro-to-distro, host-to-distro, distro-to-host copies.
+- main.rs: added --output flag to Backup subcommand, wire all 4 commands
+- Binary: 903KB (was 883KB, +20KB)
+- All 32 tests pass
+
+Verified on device (, Android 16, aarch64):
+- rename alpine myalpine: rootfs renamed, myalpine.override.sh created with
+  DISTRO_NAME="Alpine Linux - myalpine"
+- copy myalpine:/etc/passwd: source path resolved correctly against rootfs
+- backup/restore: tar commands built correctly (can't fully test without
+  network download for install first)
+- All error paths produce correct messages (unknown distro, not installed,
+  file not found, etc.)
 
 ### T6.8 — APK integration and end-to-end testing
 

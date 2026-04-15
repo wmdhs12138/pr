@@ -51,6 +51,8 @@ enum Commands {
     },
     Backup {
         distro: String,
+        #[arg(long)]
+        output: Option<String>,
     },
     Restore {
         distro: String,
@@ -194,23 +196,26 @@ fn main() {
         Commands::List { verbose } => {
             command_list(verbose);
         }
-        Commands::Backup { distro } => {
-            eprintln!("backup: not yet implemented (distro={})", distro);
-            std::process::exit(1);
+        Commands::Backup { distro, output } => {
+            if let Err(e) = commands_extra::command_backup(&distro, output.as_deref()) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Restore { distro } => {
-            eprintln!("restore: not yet implemented (distro={})", distro);
-            std::process::exit(1);
+            if let Err(e) = commands_extra::command_restore(&distro) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Rename {
             old_alias,
             new_alias,
         } => {
-            eprintln!(
-                "rename: not yet implemented ({} → {})",
-                old_alias, new_alias
-            );
-            std::process::exit(1);
+            if let Err(e) = commands_extra::command_rename(&old_alias, &new_alias) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Reset { distro } => {
             if let Err(e) = commands_extra::command_reset(&distro) {
@@ -222,11 +227,10 @@ fn main() {
             src_distro,
             dst_distro,
         } => {
-            eprintln!(
-                "copy: not yet implemented ({} → {})",
-                src_distro, dst_distro
-            );
-            std::process::exit(1);
+            if let Err(e) = commands_extra::command_copy(&src_distro, &dst_distro) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::ClearCache { .. } => {
             if let Err(e) = commands_extra::command_clear_cache() {
