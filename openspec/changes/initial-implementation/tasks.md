@@ -391,10 +391,22 @@ Implementation:
 
 ### T6.3 — CLI interface and `command_list`
 
-- [ ] Subcommands: `install`, `login`, `remove`, `list`, `backup`, `restore`, `rename`, `reset`, `copy`, `clear-cache`
-- [ ] `pr-cli list` — iterate plugins, display distro name, comment, supported architectures
-- [ ] Colored output (match proot-distro.sh format for familiarity)
-- [ ] `--help` and `--version` flags
+- [x] Subcommands: `install`, `login`, `remove`, `list`, `backup`, `restore`, `rename`, `reset`, `copy`, `clear-cache`
+- [x] `pr-cli list` — iterate plugins, display distro name, comment, supported architectures
+- [x] Colored output (match proot-distro.sh format for familiarity)
+- [x] `--help` and `--version` flags
+
+Implementation:
+- src/pr-cli/src/color.rs: ANSI escape code constants (CYAN, YELLOW, GREEN, RED, RESET, etc.)
+- src/pr-cli/src/main.rs: `command_list()` with default and --verbose modes
+  - Default: `  * <name> < alias >` matching proot-distro.sh format
+  - Verbose: alias, installed status, comment, architectures per distro
+  - Installed detection: checks APP_PREFIX/var/lib/proot-distro/installed-rootfs/<alias>
+  - Colors: cyan=* labels, yellow=distro name, green=alias/yes, red=no
+- `list --help` shows -v/--verbose option
+- All 10 subcommands have --help via clap
+- Binary size: 770KB (was 768KB in T6.2, +2KB for color strings + list formatting)
+- All 32 tests still pass
 
 ### T6.4 — `command_install`
 

@@ -1,11 +1,16 @@
 use clap::{Parser, Subcommand};
+use pr_cli::color::*;
 use pr_cli::plugin::load_plugins;
 use std::path::PathBuf;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
-#[command(name = "pr-cli", version = VERSION, about = "proot-distro replacement for Android")]
+#[command(
+    name = "pr-cli",
+    version = VERSION,
+    about = "proot-distro replacement for Android"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -36,7 +41,10 @@ enum Commands {
     Remove {
         distro: String,
     },
-    List {},
+    List {
+        #[arg(short, long)]
+        verbose: bool,
+    },
     Backup {
         distro: String,
     },
@@ -58,10 +66,87 @@ enum Commands {
     ClearCache {},
 }
 
-fn get_plugins_dir() -> PathBuf {
+fn get_prefix() -> PathBuf {
     let prefix = std::env::var("APP_PREFIX")
         .unwrap_or_else(|_| "/data/data/id.or.oo.pr/files/usr".to_string());
-    PathBuf::from(prefix).join("etc/proot-distro")
+    PathBuf::from(prefix)
+}
+
+fn get_plugins_dir() -> PathBuf {
+    get_prefix().join("etc/proot-distro")
+}
+
+fn get_installed_rootfs_dir() -> PathBuf {
+    get_prefix().join("var/lib/proot-distro/installed-rootfs")
+}
+
+fn is_installed(alias: &str) -> bool {
+    get_installed_rootfs_dir().join(alias).is_dir()
+}
+
+fn command_list(verbose: bool) {
+    let dir = get_plugins_dir();
+    let plugins = load_plugins(&dir);
+
+    println!();
+
+    if plugins.is_empty() {
+        println!("{}No distribution plug-ins found.{}", YELLOW, RESET);
+        println!();
+        println!(
+            "{}Please check the directory '{}' and create at least one distribution plug-in.{}",
+            YELLOW,
+            dir.display(),
+            RESET
+        );
+        println!();
+        return;
+    }
+
+    if verbose {
+        println!("{}Supported distributions:{}", CYAN, RESET);
+    } else {
+        println!(
+            "{}Supported distributions (format: name < alias >):{}",
+            CYAN, RESET
+        );
+        println!();
+    }
+
+    for p in &plugins {
+        if verbose {
+            println!();
+            println!("  {}* {}{}{}", CYAN, YELLOW, p.name, RESET);
+            println!();
+
+            println!("    {}Alias: {}{}{}", CYAN, GREEN, p.alias, RESET);
+
+            if is_installed(&p.alias) {
+                println!("    {}Installed: {}yes{}", CYAN, GREEN, RESET);
+            } else {
+                println!("    {}Installed: {}no{}", CYAN, RED, RESET);
+            }
+
+            if let Some(ref comment) = p.comment {
+                println!("    {}Comment: {}{}{}", CYAN, RESET, comment, RESET);
+            }
+
+            let archs = p.supported_architectures().join(", ");
+            println!("    {}Architectures: {}{}{}", CYAN, RESET, archs, RESET);
+        } else {
+            println!(
+                "  {}* {}{} {}< {}{}>{}",
+                CYAN, YELLOW, p.name, GREEN, p.alias, RESET, ""
+            );
+        }
+    }
+
+    println!();
+    println!(
+        "{}Install selected one with: {}pr-cli install <alias>{}",
+        CYAN, GREEN, RESET
+    );
+    println!();
 }
 
 fn main() {
@@ -80,16 +165,8 @@ fn main() {
             eprintln!("remove: not yet implemented (distro={})", distro);
             std::process::exit(1);
         }
-        Commands::List { .. } => {
-            let dir = get_plugins_dir();
-            let plugins = load_plugins(&dir);
-            if plugins.is_empty() {
-                eprintln!("No distributions found in {}", dir.display());
-                std::process::exit(1);
-            }
-            for p in &plugins {
-                println!("{}", p);
-            }
+        Commands::List { verbose } => {
+            command_list(verbose);
         }
         Commands::Backup { distro } => {
             eprintln!("backup: not yet implemented (distro={})", distro);
