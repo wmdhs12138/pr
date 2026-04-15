@@ -13,3 +13,12 @@
 [submodule "vendor/termlib"]
 	path = vendor/termlib
 	url = git@github.com:connectbot/termlib.git
+[submodule "vendor/bionic"]
+	path = vendor/bionic
+	url = https://android.googlesource.com/platform/bionic
+[submodule "vendor/busybox"]
+	path = vendor/busybox
+	url = git://busybox.net/busybox.git
+[submodule "vendor/musl"]
+	path = vendor/musl
+	url = git://git.musl-libc.org/musl
