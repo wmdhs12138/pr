@@ -575,10 +575,17 @@ Verified on device (, Android 16, aarch64):
 
 ### T6.10 — Cleanup
 
-- [ ] Remove `proot-distro.sh` from assets (replaced by pr-cli)
-- [ ] Remove bash binary from jniLibs (no longer needed as script interpreter)
-- [ ] Keep `bootstrap.sh` (still needed for initial directory setup + busybox applet symlinks)
-- [ ] Update `docs/bash-to-rust.md` with final results
+- [x] Remove `proot-distro.sh` from assets (replaced by pr-cli)
+- [x] Remove `assets/bin/bash` and `assets/bin/busybox` (not copied by App.kt, dead weight — 3.4MB saved)
+- [x] Remove `libpr-test.so` from jniLibs (dev-only test binary — 639KB saved)
+- [x] Remove pr-test debug button from MainActivity.kt
+- [x] Simplify `bootstrap.sh` — removed dead functions (install_bash, install_proot, install_proot_distro, install_plugins)
+- [x] Simplify `App.kt` — removed proot-distro.sh copy, removed scriptsDir, added stale file cleanup
+- [x] Keep bash+busybox in jniLibs (bash needed for distro_setup in proot, busybox for applets)
+- [x] Keep `bootstrap.sh` (creates directory structure)
+- [x] Keep `assets/bin/busybox.applets` (used by createBusyboxSymlinks)
+- [x] Bump BOOTSTRAP_VERSION to 8
+- [x] Total APK savings: ~4.1MB
 
 ## Phase 7 — Polish & Documentation
 

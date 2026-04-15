@@ -12,7 +12,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -91,46 +90,6 @@ fun DistroListScreen(app: App) {
                             outputLines = mutableListOf()
                         }) {
                             Icon(Icons.Default.Close, "Close")
-                        }
-                    } else {
-                        IconButton(onClick = {
-                            if (loadingDistro == null) {
-                                loadingDistro = "rust-test"
-                                showOutput = true
-                                outputLines = mutableListOf("Running Rust viability tests...")
-                                scope.launch {
-                                    val app = app
-                                    val binDir = File(app.prefixDir, "bin")
-                                    val prTest = File(binDir, "pr-test")
-                                    for (testName in listOf("selfcheck", "file-io", "exec-subcommand", "env-vars", "network", "parse-plugin", "proot")) {
-                                        withContext(Dispatchers.Main) {
-                                            outputLines = (outputLines + "--- $testName ---").toMutableList()
-                                        }
-                                        runDistroCommand(app, "pr-test $testName", overrideCmd = arrayOf(prTest.absolutePath, testName)) { line ->
-                                            outputLines = (outputLines + line).toMutableList()
-                                        }
-                                    }
-                                    withContext(Dispatchers.Main) {
-                                        outputLines = (outputLines + "--- pr-cli --version ---").toMutableList()
-                                    }
-                                    val prCli = File(binDir, "pr-cli")
-                                    runDistroCommand(app, "pr-cli --version", overrideCmd = arrayOf(prCli.absolutePath, "--version")) { line ->
-                                        outputLines = (outputLines + line).toMutableList()
-                                    }
-                                    withContext(Dispatchers.Main) {
-                                        outputLines = (outputLines + "--- pr-cli list ---").toMutableList()
-                                    }
-                                    runDistroCommand(app, "pr-cli list", overrideCmd = arrayOf(prCli.absolutePath, "list")) { line ->
-                                        outputLines = (outputLines + line).toMutableList()
-                                    }
-                                    withContext(Dispatchers.Main) {
-                                        outputLines = (outputLines + "--- done ---").toMutableList()
-                                        loadingDistro = null
-                                    }
-                                }
-                            }
-                        }) {
-                            Icon(Icons.Default.BugReport, "Test Rust")
                         }
                     }
                 },

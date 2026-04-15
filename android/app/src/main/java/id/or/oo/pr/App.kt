@@ -17,7 +17,7 @@ class App : Application() {
         private const val KEY_INITIALIZED = "bootstrapped"
         private const val KEY_VERSION = "bootstrap_version"
 
-        private const val BOOTSTRAP_VERSION = 7
+        private const val BOOTSTRAP_VERSION = 8
     }
 
     val prefixDir: File
@@ -49,11 +49,9 @@ class App : Application() {
         try {
             val binDir = File(prefixDir, "bin")
             val etcDir = File(prefixDir, "etc/proot-distro")
-            val scriptsDir = File(prefixDir, "scripts")
 
             binDir.mkdirs()
             etcDir.mkdirs()
-            scriptsDir.mkdirs()
             homeDir.mkdirs()
             File(prefixDir, "tmp").mkdirs()
 
@@ -61,7 +59,6 @@ class App : Application() {
             createBusyboxSymlinks(binDir)
 
             copyAssetFile("scripts/bootstrap.sh", File(binDir, "bootstrap.sh"))
-            copyAssetFile("scripts/proot-distro.sh", File(scriptsDir, "proot-distro.sh"))
             copyAssetPlugins(etcDir)
 
             executeBootstrap()
@@ -87,8 +84,21 @@ class App : Application() {
             "busybox" to "libbusybox.so",
             "proot" to "libproot.so",
             "pr-cli" to "libpr-cli.so",
-            "pr-test" to "libpr-test.so",
         )
+
+        val staleNames = listOf("pr-test", "proot-distro")
+        for (name in staleNames) {
+            val f = File(binDir, name)
+            if (f.exists() || java.nio.file.Files.isSymbolicLink(f.toPath())) {
+                f.delete()
+                Log.d(TAG, "Removed stale: $name")
+            }
+        }
+        val scriptsDir = File(prefixDir, "scripts")
+        if (scriptsDir.exists()) {
+            scriptsDir.deleteRecursively()
+            Log.d(TAG, "Removed stale scripts dir")
+        }
 
         for ((name, lib) in links) {
             val link = File(binDir, name)
