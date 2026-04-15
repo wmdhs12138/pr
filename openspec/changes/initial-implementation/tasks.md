@@ -295,14 +295,22 @@
   - Excluded termux.sh (not present in our plugin set)
   - All TARBALL_URLs verified accessible (HTTP 200, easycli.sh host)
   - Zero Termux references in any plugin — all distro_setup() hooks use standard Linux commands only
-  - 7 plugins have distro_setup(): archlinux, artix, debian, fedora, manjaro, opensuse, trisquel, ubuntu, void
-  - Remaining: adelie, almalinux, alpine, archlinux, artix, chimera, debian, deepin, fedora, manjaro, opensuse, rockylinux, trisquel, ubuntu
+  - 8 plugins have distro_setup(): archlinux, artix, debian, fedora, manjaro, opensuse, trisquel, ubuntu
+  - 6 plugins without: adelie, almalinux, alpine, chimera, deepin, rockylinux
+  - Unified all 3 plugin locations to flat format (TARBALL_URL_aarch64, not TARBALL_URL[aarch64])
+  - Verified: assets/plugins/ == src/scripts/plugins/ == src/pr-cli/tests/fixtures/plugins/
+  - Fixed run_proot_cmd shim in install.rs: inject `run_proot_cmd() { "$@"; }` before distro_setup
+  - Fixed __android_log_write linking: gated behind cfg(target_os = "android") for host testability
+  - All 32 tests pass (12 unit + 20 integration) on host after cfg gate fix
 
 - [ ] **T5.2** Integration test: Alpine
   - Install Alpine via app UI
   - Login and verify shell works
   - Run `apk update && apk add vim`
   - Remove Alpine
+  - **Progress**: Fixed root cause of `apk update` ENOSYS — zygote seccomp blocks
+    `faccessat2`/`renameat2`; added downgrade handlers in proot's SIGSYS handler.
+    Proot rebuilt and deployed. Needs on-device verification.
 
 - [ ] **T5.3** Integration test: Debian
   - Install Debian via app UI
