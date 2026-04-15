@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use pr_cli::color::*;
+use pr_cli::commands_extra;
 use pr_cli::install::command_install;
 use pr_cli::login::command_login;
 use pr_cli::plugin::load_plugins;
@@ -185,8 +186,10 @@ fn main() {
             }
         }
         Commands::Remove { distro } => {
-            eprintln!("remove: not yet implemented (distro={})", distro);
-            std::process::exit(1);
+            if let Err(e) = commands_extra::command_remove(&distro, false) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::List { verbose } => {
             command_list(verbose);
@@ -210,8 +213,10 @@ fn main() {
             std::process::exit(1);
         }
         Commands::Reset { distro } => {
-            eprintln!("reset: not yet implemented (distro={})", distro);
-            std::process::exit(1);
+            if let Err(e) = commands_extra::command_reset(&distro) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Copy {
             src_distro,
@@ -224,8 +229,10 @@ fn main() {
             std::process::exit(1);
         }
         Commands::ClearCache { .. } => {
-            eprintln!("clear-cache: not yet implemented");
-            std::process::exit(1);
+            if let Err(e) = commands_extra::command_clear_cache() {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 }

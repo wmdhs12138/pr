@@ -494,9 +494,29 @@ Verified on device (, Android 16, aarch64):
 
 ### T6.6 — `command_remove`, `command_reset`, `command_clear-cache`
 
-- [ ] `remove` — delete rootfs directory, clean up symlinks
-- [ ] `reset` — remove + re-install (call install flow)
-- [ ] `clear-cache` — delete download cache entries
+- [x] `remove` — delete rootfs directory, clean up symlinks
+- [x] `reset` — remove + re-install (call install flow)
+- [x] `clear-cache` — delete download cache entries
+
+Implementation:
+- src/pr-cli/src/commands_extra.rs (~150 lines):
+  - command_remove: validate distro exists + installed, delete .override.sh
+    (unless reset), chmod+rwx recursive on rootfs, rm -rf rootfs
+  - command_reset: validate distro exists + installed, call remove(is_reset=true)
+    then call command_install
+  - command_clear_cache: list cache dir, delete files, report reclaimed size
+    (human-readable: B/KB/MB)
+- lib.rs: expose commands_extra module
+- main.rs: wire remove, reset, clear-cache subcommands
+- Binary: 883KB (was 861KB, +22KB)
+- All 32 tests pass
+
+Verified on device (, Android 16, aarch64):
+- remove nonexistent: proper error
+- remove alpine (not installed): proper error
+- remove alpine (fake rootfs): removed successfully, directory gone
+- clear-cache (empty): "Download cache is empty"
+- clear-cache (100KB file): deleted, reported "Reclaimed 100.0KB"
 
 ### T6.7 — `command_backup`, `command_restore`, `command_rename`, `command_copy`
 
