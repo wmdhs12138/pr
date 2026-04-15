@@ -1,12 +1,17 @@
+#include <stdio.h>     /* fprintf */
 #include <errno.h>     /* E*, */
 #include <signal.h>    /* SIGSYS, */
 #include <unistd.h>    /* getpgid, */
 #include <utime.h>     /* utimbuf, */
 #include <sys/vfs.h>   /* statfs64 */
-#include <string.h>    /* memset   */
+#include <sys/stat.h>  /* lstat, */
+#include <string.h>    /* memset, strcpy */
 #include <linux/net.h> /* SYS_SENDMMSG */
 #include <assert.h>    /* assert(3), */
 #include <time.h>      /* time(2), */
+#include <talloc.h>    /* talloc_*, */
+#include <fcntl.h>     /* AT_FDCWD, O_RDONLY, O_WRONLY, O_CREAT, O_TRUNC */
+#include <limits.h>    /* PATH_MAX, */
 
 #include "extension/extension.h"
 #include "cli/note.h"
@@ -558,10 +563,182 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		break;
 	}
 
+	case PR_chdir:
+	{
+		char path[PATH_MAX];
+		char translated[PATH_MAX];
+		int size;
+
+		size = read_string(tracee, path, peek_reg(tracee, CURRENT, SYSARG_1), PATH_MAX);
+		if (size < 0) {
+			set_result_after_seccomp(tracee, size);
+			break;
+		}
+		if (size >= PATH_MAX) {
+			set_result_after_seccomp(tracee, -ENAMETOOLONG);
+			break;
+		}
+
+		status = translate_path(tracee, translated, AT_FDCWD, path, true);
+		if (status < 0) {
+			set_result_after_seccomp(tracee, status);
+			break;
+		}
+
+		set_result_after_seccomp(tracee, 0);
+
+		status = detranslate_path(tracee, translated, NULL);
+		if (status >= 0) {
+			chop_finality(translated);
+			{
+				char *tmp = talloc_strdup(tracee->fs, translated);
+				if (tmp != NULL) {
+					TALLOC_FREE(tracee->fs->cwd);
+					tracee->fs->cwd = tmp;
+					talloc_set_name_const(tracee->fs->cwd, "$cwd");
+				}
+			}
+		}
+		break;
+	}
+
+	case PR_fchdir:
+	{
+		char path[PATH_MAX];
+		char translated[PATH_MAX];
+		int dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+		int status2;
+
+		strcpy(path, ".");
+		status2 = translate_path(tracee, translated, dirfd, path, true);
+		if (status2 < 0) {
+			set_result_after_seccomp(tracee, status2);
+			break;
+		}
+
+		set_result_after_seccomp(tracee, 0);
+
+		status2 = detranslate_path(tracee, translated, NULL);
+		if (status2 >= 0) {
+			chop_finality(translated);
+			{
+				char *tmp = talloc_strdup(tracee->fs, translated);
+				if (tmp != NULL) {
+					TALLOC_FREE(tracee->fs->cwd);
+					tracee->fs->cwd = tmp;
+					talloc_set_name_const(tracee->fs->cwd, "$cwd");
+				}
+			}
+		}
+		break;
+	}
+
+	case PR_linkat:
+	{
+		char oldpath[PATH_MAX];
+		char newpath[PATH_MAX];
+		char old_translated[PATH_MAX];
+		char new_translated[PATH_MAX];
+		int olddirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+		int newdirfd = peek_reg(tracee, CURRENT, SYSARG_3);
+		int flags = peek_reg(tracee, CURRENT, SYSARG_5);
+		int size;
+
+		size = read_string(tracee, oldpath, peek_reg(tracee, CURRENT, SYSARG_2), PATH_MAX);
+		if (size < 0) {
+			set_result_after_seccomp(tracee, size);
+			break;
+		}
+		size = read_string(tracee, newpath, peek_reg(tracee, CURRENT, SYSARG_4), PATH_MAX);
+		if (size < 0) {
+			set_result_after_seccomp(tracee, size);
+			break;
+		}
+
+		status = translate_path(tracee, old_translated, olddirfd, oldpath, true);
+		if (status < 0) {
+			set_result_after_seccomp(tracee, status);
+			break;
+		}
+		status = translate_path(tracee, new_translated, newdirfd, newpath, true);
+		if (status < 0) {
+			set_result_after_seccomp(tracee, status);
+			break;
+		}
+
+		errno = 0;
+		if (renameat(AT_FDCWD, old_translated, AT_FDCWD, new_translated) == 0) {
+			set_result_after_seccomp(tracee, 0);
+		} else if (errno == EXDEV || errno == EACCES) {
+			int src_fd = open(old_translated, O_RDONLY);
+			if (src_fd < 0) {
+				set_result_after_seccomp(tracee, -errno);
+				break;
+			}
+			struct stat st;
+			fstat(src_fd, &st);
+			int dst_fd = open(new_translated, O_WRONLY | O_CREAT | O_TRUNC, st.st_mode);
+			if (dst_fd < 0) {
+				close(src_fd);
+				set_result_after_seccomp(tracee, -errno);
+				break;
+			}
+			char cpbuf[8192];
+			ssize_t n;
+			while ((n = read(src_fd, cpbuf, sizeof(cpbuf))) > 0) {
+				ssize_t w = 0;
+				while (w < n) {
+					ssize_t wn = write(dst_fd, cpbuf + w, n - w);
+					if (wn < 0) break;
+					w += wn;
+				}
+			}
+			close(dst_fd);
+			close(src_fd);
+			unlink(old_translated);
+			set_result_after_seccomp(tracee, 0);
+		} else {
+			set_result_after_seccomp(tracee, -errno);
+		}
+		break;
+	}
+
 	case PR_set_robust_list:
-	default:
-		/* Set errno to -ENOSYS */
 		set_result_after_seccomp(tracee, -ENOSYS);
+		break;
+
+	case PR_faccessat2:
+		set_sysnum(tracee, PR_faccessat);
+		poke_reg(tracee, SYSARG_4, 0);
+		restart_syscall_after_seccomp(tracee);
+		break;
+
+	case PR_renameat2:
+		set_sysnum(tracee, PR_renameat);
+		restart_syscall_after_seccomp(tracee);
+		break;
+
+	case PR_process_madvise:
+		set_result_after_seccomp(tracee, 0);
+		break;
+
+	default:
+	{
+		word_t kernel_num = peek_reg(tracee, CURRENT, SYSARG_NUM);
+		const char *log_path = "/data/data/id.or.oo.pr/cache/sigsys-log.txt";
+		FILE *f = fopen(log_path, "a");
+		if (f) {
+			fprintf(f, "SIGSYS: kernel_num=%lu pr=%d\n",
+				(unsigned long)kernel_num, (int)sysnum);
+			fclose(f);
+		}
+		if (sysnum == PR_openat || sysnum == PR_fstatat64) {
+			set_result_after_seccomp(tracee, -ENOENT);
+		} else {
+			set_result_after_seccomp(tracee, -ENOSYS);
+		}
+		break;
+	}
 	}
 
 	return 0;

@@ -29,6 +29,7 @@
 #include <unistd.h>     /* fork(2), chdir(2), getpid(2), */
 #include <string.h>     /* strcmp(3), */
 #include <errno.h>      /* errno(3), */
+#include <fcntl.h>      /* open, O_* */
 #include <stdbool.h>    /* bool, true, false, */
 #include <assert.h>     /* assert(3), */
 #include <stdlib.h>     /* atexit(3), getenv(3), */
@@ -393,10 +394,7 @@ int handle_tracee_event(Tracee *tracee, int tracee_status)
 	 * elsewhere, i.e in the ptrace emulation when single
 	 * stepping.  */
 	if (tracee->restart_how == 0) {
-		if (tracee->seccomp == ENABLED && !sysexit_necessary)
-			tracee->restart_how = PTRACE_CONT;
-		else
-			tracee->restart_how = PTRACE_SYSCALL;
+		tracee->restart_how = PTRACE_SYSCALL;
 	}
 
 	/* Not a signal-stop by default.  */
