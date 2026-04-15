@@ -12,9 +12,6 @@ class ProotLauncher(private val app: App) {
     val prefixDir: File
         get() = app.prefixDir
 
-    private val bashPath: String
-        get() = File(app.nativeLibDir, "libbash.so").absolutePath
-
     fun startSession(
         distroName: String,
         user: String = "root",
@@ -22,17 +19,16 @@ class ProotLauncher(private val app: App) {
         rows: Int = 24,
         cols: Int = 80
     ): Session? {
-        val script = File(prefixDir, "scripts/proot-distro.sh")
-        if (!script.exists()) {
-            Log.e(TAG, "proot-distro.sh not found at $script")
+        val prCli = File(prefixDir, "bin/pr-cli")
+        if (!prCli.exists()) {
+            Log.e(TAG, "pr-cli not found at $prCli")
             return null
         }
 
         val envVars = buildEnvVars()
-        val loginCmd = "${script.absolutePath} login $distroName --user $user"
-        val args = arrayOf("sh", "-c", "$bashPath -c '$loginCmd'")
+        val args = arrayOf(prCli.absolutePath, "login", distroName, "--user", user)
 
-        val masterFd = PtyNative.forkPty("/system/bin/sh", args, envVars, rows, cols)
+        val masterFd = PtyNative.forkPty(args[0], args, envVars, rows, cols)
         if (masterFd < 0) {
             Log.e(TAG, "forkPty failed with fd=$masterFd")
             return null
@@ -47,12 +43,11 @@ class ProotLauncher(private val app: App) {
         rows: Int = 24,
         cols: Int = 80,
     ): Session? {
-        val script = File(prefixDir, "scripts/proot-distro.sh")
+        val prCli = File(prefixDir, "bin/pr-cli")
         val envVars = buildEnvVars()
-        val fullCommand = "$bashPath -c 'source ${script.absolutePath} 2>/dev/null; $command'"
-        val args = arrayOf("sh", "-c", fullCommand)
+        val args = arrayOf(prCli.absolutePath, *command.split(" ").toTypedArray())
 
-        val masterFd = PtyNative.forkPty("/system/bin/sh", args, envVars, rows, cols)
+        val masterFd = PtyNative.forkPty(args[0], args, envVars, rows, cols)
         if (masterFd < 0) {
             Log.e(TAG, "forkPty failed for command: $command")
             return null
@@ -74,8 +69,10 @@ class ProotLauncher(private val app: App) {
             "PATH", "${binDir.absolutePath}:/system/bin:/system/xbin",
             "HOME", homeDir.absolutePath,
             "PROOT_NO_SECCOMP", "1",
+            "PROOT_TMP_DIR", app.cacheDir.absolutePath,
             "TERM", "xterm-256color",
             "LANG", "en_US.UTF-8",
+            "TMPDIR", app.cacheDir.absolutePath,
         )
     }
 

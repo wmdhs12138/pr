@@ -1,12 +1,18 @@
+use std::error::Error;
 use std::fs;
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
+
+use sha2::{Digest, Sha256};
 
 use crate::color::*;
 use crate::plugin::load_plugins;
 use crate::shared::{
-    get_bin_dir, get_default_path_env, get_download_cache_dir, get_installed_rootfs_dir,
+    get_download_cache_dir, get_installed_rootfs_dir,
+    get_native_busybox, get_native_proot, get_native_bash,
     get_plugins_dir, get_prefix, msg_error, msg_status, DEFAULT_FAKE_KERNEL_RELEASE,
     DEFAULT_FAKE_KERNEL_VERSION, DEFAULT_PRIMARY_NAMESERVER, DEFAULT_SECONDARY_NAMESERVER,
 };
@@ -65,9 +71,111 @@ fn run_cmd(bin: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
+fn run_busybox_cmd(applet: &str, args: &[&str]) -> Result<String, String> {
+    let busybox = get_native_busybox();
+    let mut full_args = vec![applet.to_string()];
+    full_args.extend(args.iter().map(|s| s.to_string()));
+    let output = Command::new(&busybox)
+        .arg0("busybox")
+        .args(&full_args)
+        .output()
+        .map_err(|e| format!("failed to execute busybox {}: {}", applet, e))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("busybox {} exited with code {:?}", applet, output.status.code())
+        } else {
+            stderr
+        })
+    }
+}
+
+fn extract_tarball(
+    archive_path: &str,
+    dest: &str,
+    strip_components: usize,
+    exclude: &[&str],
+) -> Result<(), String> {
+    let file = fs::File::open(archive_path)
+        .map_err(|e| format!("open archive: {}", e))?;
+    let decompressor = xz2::read::XzDecoder::new(file);
+    let mut archive = tar::Archive::new(decompressor);
+    archive.set_preserve_permissions(true);
+    archive.set_preserve_mtime(true);
+
+    for entry in archive.entries().map_err(|e| format!("read tar entries: {}", e))? {
+        let mut entry = entry.map_err(|e| format!("read tar entry: {}", e))?;
+        let path = entry.path().map_err(|e| format!("get tar path: {}", e))?;
+        let path_str = path.to_string_lossy();
+
+        if exclude.iter().any(|exc| path_str.starts_with(exc) || path_str.starts_with(&format!("./{}", exc))) {
+            continue;
+        }
+
+        let stripped = if strip_components > 0 {
+            match path.components().skip(strip_components).collect::<std::path::PathBuf>().as_path().to_str() {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            }
+        } else {
+            path_str.to_string()
+        };
+
+        let dest_path = format!("{}/{}", dest, stripped);
+        let dest_path = std::path::Path::new(&dest_path);
+
+        if let Some(parent) = dest_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_dir() {
+            fs::create_dir_all(dest_path)
+                .map_err(|e| format!("create dir {}: {}", dest_path.display(), e))?;
+            let mode = entry.header().mode().unwrap_or(0o755);
+            let _ = fs::set_permissions(dest_path, fs::Permissions::from_mode(mode));
+        } else if entry_type.is_symlink() {
+            let target = entry.link_name().map_err(|e| format!("read symlink target: {}", e))?;
+            let target = target.map(|t| t.to_string_lossy().to_string()).unwrap_or_default();
+            if dest_path.exists() {
+                let _ = fs::remove_file(dest_path);
+            }
+            std::os::unix::fs::symlink(&target, dest_path)
+                .map_err(|e| format!("symlink {} -> {}: {}", dest_path.display(), target, e))?;
+        } else if entry_type.is_hard_link() {
+            let target = entry.link_name().map_err(|e| format!("read hardlink target: {}", e))?;
+            let target_str = target.map(|t| t.to_string_lossy().to_string()).unwrap_or_default();
+            let link_target = if strip_components > 0 {
+                format!("{}/{}", dest, {
+                    let p = std::path::Path::new(&target_str);
+                    match p.components().skip(strip_components).collect::<std::path::PathBuf>().as_path().to_str() {
+                        Some(s) if !s.is_empty() => s.to_string(),
+                        _ => continue,
+                    }
+                })
+            } else {
+                format!("{}/{}", dest, target_str)
+            };
+            if dest_path.exists() {
+                let _ = fs::remove_file(dest_path);
+            }
+            let _ = fs::hard_link(&link_target, dest_path);
+        } else {
+            let mut out = fs::File::create(dest_path)
+                .map_err(|e| format!("create {}: {}", dest_path.display(), e))?;
+            std::io::copy(&mut entry, &mut out)
+                .map_err(|e| format!("write {}: {}", dest_path.display(), e))?;
+            let mode = entry.header().mode().unwrap_or(0o644);
+            let _ = fs::set_permissions(dest_path, fs::Permissions::from_mode(mode));
+        }
+    }
+
+    Ok(())
+}
+
 fn download_file(url: &str, output_path: &str, max_retries: u32) -> Result<(), String> {
-    let bin_dir = get_bin_dir();
-    let wget = format!("{}/wget", bin_dir);
     let mut retry = 0;
     let mut delay = 5u64;
 
@@ -83,26 +191,73 @@ fn download_file(url: &str, output_path: &str, max_retries: u32) -> Result<(), S
 
         let _ = fs::remove_file(output_path);
 
-        let output = Command::new(&wget)
-            .args(["-T", "30", "-q", "-O", output_path, url])
-            .output();
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("create tokio runtime: {}", e))?;
 
-        match output {
-            Ok(o) if o.status.success() => {
+        let result = rt.block_on(async {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .danger_accept_invalid_certs(true)
+                .build()
+                .map_err(|e| format!("build HTTP client: {}", e))?;
+
+            let resp = client.get(url).send().await.map_err(|e| {
+                let mut msg = format!("HTTP request failed: {}", e);
+                let mut source: Option<&dyn Error> = e.source();
+                while let Some(err) = source {
+                    msg.push_str(&format!("\n  caused by: {}", err));
+                    source = err.source();
+                }
+                eprintln!("{}", msg);
+                msg
+            })?;
+
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status()));
+            }
+
+            let total = resp.content_length();
+            let mut file = fs::File::create(output_path)
+                .map_err(|e| format!("create file: {}", e))?;
+
+            let mut downloaded: u64 = 0;
+            let mut stream = resp.bytes_stream();
+            use futures_util::StreamExt;
+
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| format!("read chunk: {}", e))?;
+                file.write_all(&chunk).map_err(|e| format!("write chunk: {}", e))?;
+                downloaded += chunk.len() as u64;
+
+                if let Some(total) = total {
+                    if total > 0 {
+                        let pct = (downloaded as f64 / total as f64 * 100.0) as u32;
+                        println!("\r{}[{}*{}{}] {:.1}MB / {:.1}MB ({}%){}   ",
+                            BLUE, GREEN, BLUE, CYAN,
+                            downloaded as f64 / (1024.0 * 1024.0),
+                            total as f64 / (1024.0 * 1024.0),
+                            pct, RESET);
+                    }
+                }
+            }
+
+            file.sync_all().map_err(|e| format!("flush file: {}", e))?;
+            drop(file);
+
+            Ok(())
+        });
+
+        match result {
+            Ok(()) => {
                 if Path::new(output_path).exists()
                     && fs::metadata(output_path).map(|m| m.len()).unwrap_or(0) > 0
                 {
                     return Ok(());
                 }
             }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                if !stderr.trim().is_empty() {
-                    eprintln!("{}", stderr.trim());
-                }
-            }
             Err(e) => {
-                return Err(format!("failed to execute wget: {}", e));
+                eprintln!("download error: {}", e);
             }
         }
 
@@ -114,10 +269,17 @@ fn download_file(url: &str, output_path: &str, max_retries: u32) -> Result<(), S
 }
 
 fn verify_sha256(expected: &str, filepath: &str) -> Result<(), String> {
-    let bin_dir = get_bin_dir();
-    let sha256sum = format!("{}/sha256sum", bin_dir);
-    let result = run_cmd(&sha256sum, &[filepath])?;
-    let actual = result.split_whitespace().next().unwrap_or("");
+    let mut file = fs::File::open(filepath)
+        .map_err(|e| format!("open {}: {}", filepath, e))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("read {}: {}", filepath, e))?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+    }
+    let hash = hasher.finalize();
+    let actual = format!("{:x}", hash);
 
     if actual == expected {
         Ok(())
@@ -163,7 +325,6 @@ fn setup_fake_sysdata(rootfs: &str) -> Result<(), String> {
 
 fn write_config_files(rootfs: &str, distro_name: &str) -> Result<(), String> {
     let prefix = get_prefix();
-    let bin_dir = get_bin_dir();
     let default_path_env = format!(
         "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:{}/bin",
         prefix
@@ -222,8 +383,8 @@ fn write_config_files(rootfs: &str, distro_name: &str) -> Result<(), String> {
             continue;
         }
         msg_status(&format!("Updating PATH in '{}' if needed...", fp));
-        let _ = run_cmd(
-            &format!("{}/sed", bin_dir),
+        let _ = run_busybox_cmd(
+            "sed",
             &[
                 "-i",
                 "-E",
@@ -307,8 +468,8 @@ fn write_config_files(rootfs: &str, distro_name: &str) -> Result<(), String> {
         if content.contains("distro_setup()") {
             msg_status("Running distribution-specific configuration steps...");
 
-            let proot = format!("{}/proot", bin_dir);
-            let bash = format!("{}/bash", bin_dir);
+            let proot = get_native_proot();
+            let bash = get_native_bash();
             let rootfs_dir = rootfs.to_string();
             let setup_script = format!(
                 "source /etc/proot-distro/{}.sh && cd / && distro_setup",
@@ -559,31 +720,7 @@ pub fn command_install(
     // Extract
     msg_status("Extracting rootfs, please wait...");
 
-    let bin_dir = get_bin_dir();
-    let proot = format!("{}/proot", bin_dir);
-    let tar = format!("{}/tar", bin_dir);
-
-    let extract_status = Command::new(&proot)
-        .env("PROOT_NO_SECCOMP", "1")
-        .env("PROOT_L2S_DIR", &l2s_dir)
-        .args([
-            "--link2symlink",
-            &tar,
-            "-C",
-            &rootfs,
-            "--strip=1",
-            "-xf",
-            &archive_path,
-            "--exclude=dev",
-        ])
-        .status()
-        .map_err(|e| format!("execute proot tar: {}", e))?;
-
-    if !extract_status.success() {
-        msg_error("Extraction failed.");
-        cleanup_on_failure(&rootfs, &distro_name);
-        return Err("extraction failed".to_string());
-    }
+    extract_tarball(&archive_path, &rootfs, 1, &["dev"])?;
 
     // Validate rootfs structure
     if !Path::new(&format!("{}/etc", rootfs)).exists() {

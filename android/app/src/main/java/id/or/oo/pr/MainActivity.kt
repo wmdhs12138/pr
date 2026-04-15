@@ -324,14 +324,15 @@ private suspend fun runDistroCommand(
         "APP_PACKAGE" to app.packageName,
         "PATH" to "${binDir.absolutePath}:/system/bin:/system/xbin",
         "PROOT_NO_SECCOMP" to "1",
+        "PROOT_TMP_DIR" to app.cacheDir.absolutePath,
         "HOME" to app.homeDir.absolutePath,
         "TERM" to "xterm-256color",
         "TMPDIR" to app.cacheDir.absolutePath,
     )
 
     val cmd = overrideCmd ?: run {
-        val script = File(app.prefixDir, "scripts/proot-distro.sh").absolutePath
-        arrayOf("/system/bin/sh", script, *command.split(" ").toTypedArray())
+        val prCli = File(binDir, "pr-cli").absolutePath
+        arrayOf(prCli, *command.split(" ").toTypedArray())
     }
 
     android.util.Log.d("PR", "Running: ${cmd.joinToString(" ")}")

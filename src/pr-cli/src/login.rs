@@ -343,7 +343,7 @@ pub fn command_login(
     }
 
     // The proot binary
-    let proot = format!("{}/proot", bin_dir);
+    let proot = get_native_proot();
 
     let mut full_args = Vec::new();
     full_args.extend(args);

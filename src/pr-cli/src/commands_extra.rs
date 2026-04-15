@@ -1,12 +1,13 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
 use crate::plugin::load_plugins;
 use crate::shared::{
-    get_bin_dir, get_download_cache_dir, get_installed_rootfs_dir, get_plugins_dir, msg_error,
-    msg_status,
+    get_bin_dir, get_download_cache_dir, get_installed_rootfs_dir, get_native_busybox,
+    get_plugins_dir, msg_error, msg_status,
 };
 
 fn chmod_recursive(path: &Path) {
@@ -218,10 +219,9 @@ pub fn command_backup(distro_name: &str, output_path: Option<&str>) -> Result<()
         format!("{}.override.sh", distro_name)
     };
 
-    msg_status("Archiving the rootfs and plug-in...");
+    let busybox = get_native_busybox();
 
-    let bin_dir = get_bin_dir();
-    let tar = format!("{}/tar", bin_dir);
+    msg_status("Archiving the rootfs and plug-in...");
     let parent_rootfs = Path::new(&installed_rootfs_dir)
         .parent()
         .unwrap_or(Path::new("/"))
@@ -243,7 +243,9 @@ pub fn command_backup(distro_name: &str, output_path: Option<&str>) -> Result<()
         .to_string_lossy()
         .to_string();
 
-    let status = Command::new(&tar)
+    let status = Command::new(&busybox)
+        .arg0("busybox")
+        .arg("tar")
         .args([
             "-c",
             "--auto-compress",
@@ -289,8 +291,7 @@ pub fn command_restore(tarball_path: &str) -> Result<(), String> {
 
     msg_status("Extracting distribution plug-in and rootfs from the tarball...");
 
-    let bin_dir = get_bin_dir();
-    let tar = format!("{}/tar", bin_dir);
+    let busybox = get_native_busybox();
     let parent_rootfs = Path::new(&installed_rootfs_dir)
         .parent()
         .unwrap_or(Path::new("/"))
@@ -312,7 +313,9 @@ pub fn command_restore(tarball_path: &str) -> Result<(), String> {
         .to_string_lossy()
         .to_string();
 
-    let status = Command::new(&tar)
+    let status = Command::new(&busybox)
+        .arg0("busybox")
+        .arg("tar")
         .args([
             "-x",
             "--auto-compress",
@@ -437,7 +440,6 @@ pub fn command_rename(old_alias: &str, new_alias: &str) -> Result<(), String> {
 
 pub fn command_copy(src: &str, dst: &str) -> Result<(), String> {
     let installed_rootfs_dir = get_installed_rootfs_dir();
-    let bin_dir = get_bin_dir();
 
     let (src_dist, src_path) = parse_dist_path(src);
     let (dst_dist, dst_path) = parse_dist_path(dst);
@@ -465,9 +467,10 @@ pub fn command_copy(src: &str, dst: &str) -> Result<(), String> {
 
     msg_status("Copying files, this may take a while...");
 
-    let cp = format!("{}/cp", bin_dir);
-    let status = Command::new(&cp)
-        .args(["-a", &src_full, &dst_full])
+    let busybox = get_native_busybox();
+    let status = Command::new(&busybox)
+        .arg0("busybox")
+        .args(["cp", "-a", &src_full, &dst_full])
         .status()
         .map_err(|e| format!("exec cp: {}", e))?;
 

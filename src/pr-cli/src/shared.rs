@@ -32,6 +32,25 @@ pub fn get_default_path_env() -> String {
     format!("{}:{}", DEFAULT_PATH_ENV_SUFFIX, get_prefix())
 }
 
+pub fn get_native_lib_dir() -> String {
+    std::fs::read_link("/proc/self/exe")
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.display().to_string()))
+        .unwrap_or_else(|| get_bin_dir())
+}
+
+pub fn get_native_busybox() -> String {
+    format!("{}/libbusybox.so", get_native_lib_dir())
+}
+
+pub fn get_native_proot() -> String {
+    format!("{}/libproot.so", get_native_lib_dir())
+}
+
+pub fn get_native_bash() -> String {
+    format!("{}/libbash.so", get_native_lib_dir())
+}
+
 pub fn msg_status(text: &str) {
     println!(
         "{}\x1b[1;34m[\x1b[32m*\x1b[1;34m\x1b[36m {}\x1b[0m",

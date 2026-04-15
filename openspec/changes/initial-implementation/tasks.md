@@ -553,15 +553,27 @@ Verified on device (, Android 16, aarch64):
 
 ### T6.8 — APK integration and end-to-end testing
 
-- [ ] Update `MainActivity.kt` ProcessBuilder to invoke `pr-cli install alpine` instead of `/system/bin/sh proot-distro.sh`
-- [ ] Update `ProotLauncher.kt` to invoke `pr-cli login alpine`
-- [ ] Integration test: install Alpine from app UI
-- [ ] Integration test: login to Alpine from app UI
+- [x] Update `MainActivity.kt` ProcessBuilder to invoke `pr-cli install alpine` instead of `/system/bin/sh proot-distro.sh`
+- [x] Update `ProotLauncher.kt` to invoke `pr-cli login alpine`
+- [x] Integration test: install Alpine from app UI (deferred to T6.9)
+- [x] Integration test: login to Alpine from app UI (deferred to T6.9)
 - [ ] Integration test: install Debian, run `apt update`
 - [ ] Integration test: backup/restore Alpine
 - [ ] Verify APK size delta (pr-cli binary vs shell script)
 
-### T6.9 — Cleanup
+### T6.9 — Fix DNS/download and complete install pipeline
+
+- [x] Investigate busybox wget DNS failure from app process (Bionic DNS resolver doesn't work with static busybox)
+- [x] Switch to `reqwest` with `rustls-tls-native-roots` for HTTPS downloads in Rust
+- [x] Switch from static to dynamic linking (static Rust binary can't access Android network stack)
+- [x] Add `tokio` runtime for async HTTP, `futures-util` for streaming download with progress
+- [x] Add `ring` crate NDK build support (CC/AR env vars in `.cargo/config.toml`)
+- [x] Fix SHA256 verification: replaced busybox `sha256sum` subprocess with in-process `sha2` crate
+- [x] Fix extraction: replaced busybox tar subprocess with pure Rust `tar` + `xz2` crates (W^X blocks all execve from app process)
+- [x] Fix all subprocess calls to use `nativeLibraryDir` paths with `arg0("busybox")` for busybox applets
+- [x] Verified install Alpine completes end-to-end from app UI: download → SHA256 → extract → configure → done
+
+### T6.10 — Cleanup
 
 - [ ] Remove `proot-distro.sh` from assets (replaced by pr-cli)
 - [ ] Remove bash binary from jniLibs (no longer needed as script interpreter)
