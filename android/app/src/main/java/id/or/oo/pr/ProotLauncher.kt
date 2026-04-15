@@ -16,8 +16,8 @@ class ProotLauncher(private val app: App) {
         distroName: String,
         user: String = "root",
         isolated: Boolean = false,
-        rows: Int = 24,
-        cols: Int = 80
+        rows: Int = 50,
+        cols: Int = 200
     ): Session? {
         val prCli = File(prefixDir, "bin/pr-cli")
         if (!prCli.exists()) {

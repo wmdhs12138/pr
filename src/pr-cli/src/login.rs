@@ -6,6 +6,18 @@ use std::process::Command;
 
 use crate::shared::*;
 
+fn android_log(msg: &str) {
+    unsafe {
+        let c_msg = std::ffi::CString::new(msg).unwrap_or_default();
+        let tag = b"PR\0".as_ptr() as *const i8;
+        __android_log_write(4, tag, c_msg.as_ptr() as *const i8);
+    }
+}
+
+extern "C" {
+    fn __android_log_write(prio: i32, tag: *const i8, text: *const i8) -> i32;
+}
+
 struct PasswdEntry {
     uid: u32,
     gid: u32,
@@ -220,6 +232,15 @@ pub fn command_login(
     }
     args.push(format!("--bind={}/tmp:/dev/shm", rootfs));
 
+    // Minimal binds
+    args.push("--bind=/dev".to_string());
+    args.push("--bind=/proc".to_string());
+    args.push("--bind=/sys".to_string());
+
+    // Core binds
+    args.push("--bind=/proc/self/fd:/dev/fd".to_string());
+    args.push("--bind=/dev/urandom:/dev/random".to_string());
+
     // Fake /proc entries
     for (fake, real) in &[
         ("proc/.loadavg", "/proc/loadavg"),
@@ -233,23 +254,15 @@ pub fn command_login(
         }
     }
     if Path::new("/sys/fs/selinux").exists() {
-        args.push(format!("{}/sys/.empty:/sys/fs/selinux", rootfs));
+        args.push(format!("--bind={}/sys/.empty:/sys/fs/selinux", rootfs));
     }
 
-    // /proc/self/fd binds for stdin/stdout/stderr
-    for (fd, name) in &[(0, "stdin"), (1, "stdout"), (2, "stderr")] {
-        let fd_path = format!("/proc/self/fd/{}", fd);
-        if fs::read_link(&fd_path).is_ok() {
-            args.push(format!("--bind={}:{}", fd_path, name));
-        }
-    }
-
-    // Core binds
-    args.push("--bind=/proc/self/fd:/dev/fd".to_string());
-    args.push("--bind=/dev/urandom:/dev/random".to_string());
-    args.push("--bind=/sys".to_string());
-    args.push("--bind=/proc".to_string());
-    args.push("--bind=/dev".to_string());
+    // /tmp -> cache dir (proot needs writable tmp)
+    let cache_dir = std::env::var("PROOT_TMP_DIR")
+        .or_else(|_| std::env::var("TMPDIR"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    args.push(format!("--bind={}/tmp:/dev/shm", rootfs));
+    args.push(format!("--bind={}:{}", cache_dir, "/tmp"));
 
     // -L (fix lstat)
     args.push("-L".to_string());
@@ -260,7 +273,7 @@ pub fn command_login(
         .unwrap_or_else(|_| DEFAULT_FAKE_KERNEL_RELEASE.to_string());
     let machine = std::env::var("PROOT_DISTRO_MACHINE").unwrap_or_else(|_| "aarch64".to_string());
     args.push(format!(
-        "--kernel-release=\\Linux\\{}\\{}\\{}\\{}\\localdomain\\-1\\",
+        "--kernel-release=Linux\\{}\\{}\\{}\\{}\\localdomain\\-1\\",
         hostname, kernel_release, DEFAULT_FAKE_KERNEL_VERSION, machine
     ));
 
@@ -269,17 +282,13 @@ pub fn command_login(
         args.push("--link2symlink".to_string());
     }
 
-    // sysvipc
-    args.push("--sysvipc".to_string());
-
     // kill-on-exit
     args.push("--kill-on-exit".to_string());
 
-    // Rootfs, cwd, change-id
+    // Rootfs + cwd
     let login_wd = entry.home.clone();
-    args.push(format!("--change-id={}:{}", entry.uid, entry.gid));
     args.push(format!("--rootfs={}", rootfs));
-    args.push(format!("--cwd={}", login_wd));
+    args.push("--cwd=/".to_string());
 
     // Build environment for login shell
     let mut login_env: Vec<String> = vec![format!("PATH={}", get_default_path_env())];
@@ -319,22 +328,9 @@ pub fn command_login(
         }
     }
 
-    // Build command part: /usr/bin/env -i ENV... SHELL -l [extra_args]
+    // Build command
     let mut cmd_args: Vec<String> = Vec::new();
-    cmd_args.push("/usr/bin/env".to_string());
-    cmd_args.push("-i".to_string());
-    cmd_args.extend(login_env);
-    cmd_args.push(format!(
-        "COLORTERM={}",
-        std::env::var("COLORTERM").unwrap_or_default()
-    ));
-    cmd_args.push(format!("HOME={}", entry.home));
-    cmd_args.push(format!("USER={}", user));
-    cmd_args.push(format!(
-        "TERM={}",
-        std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string())
-    ));
-    cmd_args.push(entry.shell.clone());
+    cmd_args.push("/bin/sh".to_string());
     cmd_args.push("-l".to_string());
 
     if !extra_args.is_empty() {
@@ -349,10 +345,43 @@ pub fn command_login(
     full_args.extend(args);
     full_args.extend(cmd_args);
 
-    let err = Command::new(&proot)
+    let l2s_dir = std::env::var("PROOT_L2S_DIR").unwrap_or_default();
+
+    android_log(&format!("exec: proot {} (cwd=/)", full_args.join(" ")));
+
+    // Build env vars for the proot child
+    let mut child_env: Vec<(String, String)> = Vec::new();
+    for line in &login_env {
+        if let Some((k, v)) = line.split_once('=') {
+            child_env.push((k.to_string(), v.to_string()));
+        }
+    }
+    child_env.push((
+        "COLORTERM".to_string(),
+        std::env::var("COLORTERM").unwrap_or_default(),
+    ));
+    child_env.push(("HOME".to_string(), entry.home.clone()));
+    child_env.push(("USER".to_string(), user.to_string()));
+    child_env.push((
+        "TERM".to_string(),
+        std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string()),
+    ));
+    child_env.push(("LANG".to_string(), "en_US.UTF-8".to_string()));
+    child_env.push(("TMPDIR".to_string(), "/tmp".to_string()));
+
+    let mut cmd = Command::new(&proot);
+    cmd.arg0("proot")
         .env("PROOT_NO_SECCOMP", "1")
-        .args(&full_args)
-        .exec();
+        .env("PROOT_L2S_DIR", &l2s_dir)
+        .env("PROOT_TMP_DIR", &cache_dir)
+        .env("TMPDIR", &cache_dir)
+        .args(&full_args);
+
+    for (k, v) in &child_env {
+        cmd.env(k, v);
+    }
+
+    let err = cmd.exec();
 
     Err(format!("exec proot failed: {}", err))
 }

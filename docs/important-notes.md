@@ -394,3 +394,91 @@ Proot itself starts fine, but `execve` inside proot fails with ENOSYS. This is t
 ### Recommendation: Confirmed Viable
 
 The Rust approach is **viable**. All core capabilities (exec, file I/O, subprocess spawning, env vars) work from the app process. The remaining issues (network, proot exec) are orthogonal to the Rust vs shell choice — they would exist in either approach.
+
+---
+
+## Android W^X / SELinux / targetSdk Restrictions
+
+Date: 2026-04-15
+Device: Samsung, Android 16 (SDK 36), aarch64 ()
+Context: Discovered during T5.2/T6.9 integration testing
+
+### What is W^X
+
+Android enforces Write-XOR-Execute (W^X) policy on app processes. The kernel blocks `execve()` on files located in app-writable directories (labeled `app_data_file` by SELinux). This prevents apps from downloading and running arbitrary code.
+
+### The Three Blockers (targetSdk 29+)
+
+When proot runs from the app process (`u:r:untrusted_app:s0`) with targetSdk >= 29:
+
+```
+proot error: execve("/bin/sh"): Permission denied            ← W^X blocks execve on app_data_file
+proot error: can't chmod '/data/.../proot-XXXX': Function not implemented  ← seccomp ENOSYS
+proot error: can't chdir to '/': Function not implemented     ← seccomp ENOSYS
+```
+
+1. **execve Permission denied**: Proot's child tries to exec `/bin/sh` which resolves to the rootfs in `/data/data/...`. SELinux blocks it because the file has the `app_data_file` label.
+
+2. **chmod ENOSYS**: Proot's tracer code needs to `chmod()` a temp file. The Android zygote's seccomp filter returns ENOSYS (Function not implemented).
+
+3. **chdir ENOSYS**: Proot's tracer code needs to `chdir()` into the rootfs. Same seccomp filter blocks it.
+
+### Why run-as Works But App Doesn't
+
+```
+run-as id.or.oo.pr   → SELinux context: u:r:runas_app:s0:c3,c258,c512,c768  → proot works
+app process          → SELinux context: u:r:untrusted_app:s0:c3,c258,c512,c768  → proot blocked
+```
+
+`runas_app` has different SELinux policies than `untrusted_app`. The W^X and seccomp restrictions only apply to `untrusted_app`.
+
+### targetSdk Threshold
+
+Tested on device:
+
+| targetSdk | proot login | Notes |
+|-----------|-------------|-------|
+| 28 | **WORKS** | No W^X enforcement. Proot can execve, chmod, chdir freely. |
+| 29 | **FAILS** | W^X + seccomp enforced. All three blockers appear. |
+| 35 | **FAILS** | Same as 29+. |
+
+**Conclusion**: targetSdk 28 is the maximum for proot to function. This matches Termux's approach (they also use targetSdk 28).
+
+### nativeLibraryDir is the Exception
+
+Files in the APK's native library directory can be executed even from `untrusted_app`:
+
+```
+/data/app/~~<random>/<package>-<random>/lib/arm64/  → SELinux allows execve()
+/data/data/<package>/files/                          → SELinux denies execve()
+```
+
+This is why `libproot.so`, `libbusybox.so`, `libpr-cli.so` can all be exec'd — they're in nativeLibraryDir. But the rootfs binaries in `/data/data/.../installed-rootfs/` cannot.
+
+### Why Proot Bind Mounts Don't Help
+
+Proot's `--bind` is virtual — it only translates paths in ptrace syscall interception. When the kernel actually performs the `execve()`, it sees the real filesystem path (in `/data/data/...`), not the virtual guest path. So binding `libbusybox.so:/bin/sh` doesn't help — the kernel still tries to exec the real rootfs file.
+
+### Why the Fork Matters
+
+The forkPty() JNI function forks the app process. The child inherits `untrusted_app` SELinux context AND the zygote's seccomp filter. This is different from `run-as` which creates a new process in `runas_app` context.
+
+### Implications for Future Android Versions
+
+- **Android 15+**: Google may further restrict ptrace or native library execution
+- **Samsung Knox**: Some firmware mounts `/data/data/<pkg>/files/` with `noexec` flag
+- **Yama ptrace_scope**: Must be 0 or 1 for proot to work (Samsung defaults to 1, which allows parent→child ptrace)
+
+### Potential Workarounds (Future Research)
+
+1. **Static ELF Loader** (`libexecloader.so`): A custom no_std Rust binary in nativeLibraryDir that maps target ELF into memory via mmap (not execve). Proot rewrites `execve("/bin/sh")` to `execve("libexecloader.so", ["/bin/sh"])`. Solves the execve blocker but NOT the chmod/chdir seccomp blockers.
+
+2. **Guest dynamic linker as proxy**: Copy `ld-musl-aarch64.so.1` into nativeLibraryDir. Proot rewrites execve to go through the linker. Unlikely to work because the linker needs a full Linux ABI.
+
+3. **Lower targetSdk to 28**: Current working solution. Same as Termux. May limit Play Store distribution.
+
+### Key Files
+
+- `android/app/build.gradle.kts` — `targetSdk = 28` (MUST NOT exceed 28 for proot to work)
+- `src/proot/src/tracee/event.c` — seccomp patch (line 95: skip seccomp filter installation)
+- `src/pr-cli/src/login.rs` — proot invocation with PROOT_TMP_DIR, arg0("proot"), nativeLibraryDir paths
