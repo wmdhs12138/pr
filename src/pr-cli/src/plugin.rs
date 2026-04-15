@@ -110,6 +110,14 @@ pub fn parse_plugin(path: &Path) -> Result<DistroPlugin, ParseError> {
                 urls.insert(arch.to_string(), value.to_string());
             } else if let Some(arch) = key.strip_prefix("TARBALL_SHA256_") {
                 sha256s.insert(arch.to_string(), value.to_string());
+            } else if let Some(rest) = key.strip_prefix("TARBALL_URL[") {
+                if let Some(arch) = rest.strip_suffix("]") {
+                    urls.insert(arch.to_string(), value.to_string());
+                }
+            } else if let Some(rest) = key.strip_prefix("TARBALL_SHA256[") {
+                if let Some(arch) = rest.strip_suffix("]") {
+                    sha256s.insert(arch.to_string(), value.to_string());
+                }
             }
         }
 
@@ -168,7 +176,8 @@ fn is_valid_key(key: &str) -> bool {
     if key.is_empty() {
         return false;
     }
-    key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    key.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '[' || c == ']')
 }
 
 fn extract_quoted_value(s: &str) -> Option<&str> {
@@ -181,8 +190,9 @@ fn extract_quoted_value(s: &str) -> Option<&str> {
 }
 
 pub fn load_plugins(dir: &Path) -> Vec<DistroPlugin> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
     };
 
     let mut plugins: Vec<DistroPlugin> = entries

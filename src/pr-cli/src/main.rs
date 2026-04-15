@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use pr_cli::color::*;
+use pr_cli::install::command_install;
 use pr_cli::plugin::load_plugins;
 use std::path::PathBuf;
 
@@ -153,9 +154,21 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Install { distro, .. } => {
-            eprintln!("install: not yet implemented (distro={})", distro);
-            std::process::exit(1);
+        Commands::Install {
+            distro,
+            override_alias,
+            override_tarball_url,
+            override_tarball_sha256,
+        } => {
+            if let Err(e) = command_install(
+                &distro,
+                override_alias.as_deref(),
+                override_tarball_url.as_deref(),
+                override_tarball_sha256.as_deref(),
+            ) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Login { distro, .. } => {
             eprintln!("login: not yet implemented (distro={})", distro);

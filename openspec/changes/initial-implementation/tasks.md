@@ -410,14 +410,42 @@ Implementation:
 
 ### T6.4 — `command_install`
 
-- [ ] Argument parsing: `--override-alias`, `--override-tarbll-url`, `--override-tarball-sha256`
-- [ ] Download tarball via busybox wget subprocess (with retry, 3 attempts)
-- [ ] SHA256 verification via busybox sha256sum subprocess
-- [ ] Extract tarball via busybox tar subprocess (`--link2symlink` wrapper if needed)
-- [ ] Write config files: `/etc/passwd`, `/etc/group`, `/etc/resolv.conf`, `/etc/environment`
-- [ ] Generate fake `/proc` data (port `setup_fake_sysdata()` from shell)
-- [ ] Handle `--override-alias` (copy plugin, rewrite DISTRO_NAME)
-- [ ] Call `distro_setup()` via proot if plugin has one
+- [x] Argument parsing: `--override-alias`, `--override-tarbll-url`, `--override-tarball-sha256`
+- [x] Download tarball via busybox wget subprocess (with retry, 3 attempts)
+- [x] SHA256 verification via busybox sha256sum subprocess
+- [x] Extract tarball via busybox tar subprocess (`--link2symlink` wrapper if needed)
+- [x] Write config files: `/etc/passwd`, `/etc/group`, `/etc/resolv.conf`, `/etc/environment`
+- [x] Generate fake `/proc` data (port `setup_fake_sysdata()` from shell)
+- [x] Handle `--override-alias` (copy plugin, rewrite DISTRO_NAME)
+- [x] Call `distro_setup()` via proot if plugin has one
+
+Implementation:
+- src/pr-cli/src/install.rs: full command_install (~640 lines)
+  - Validate distro exists, not already installed
+  - Detect device arch via ELF e_machine parsing (busybox binary) or DISTRO_ARCH env
+  --override-alias: copy plugin as .override.sh, rewrite DISTRO_NAME
+  - Download with busybox wget, 3 retries, exponential backoff (5,10,20s)
+  - SHA256 verification via busybox sha256sum
+  - Extract: proot --link2symlink tar -xf --strip=1 --exclude=dev
+  - Write /etc/resolv.conf (8.8.8.8 + 8.8.4.4)
+  - Write /etc/hosts (IPv4 + IPv6 localhost entries)
+  - Write /etc/environment (Android env vars + PATH + TERM)
+  - Fix PATH in /etc/bash.bashrc, /etc/profile, /etc/login.defs via sed
+  - Register Android UIDs: passwd/shadow/group/gshadow with aid_* entries
+  - Fake /proc: .loadavg, .stat, .uptime, .version, .vmstat
+  - distro_setup() via proot if plugin has one
+  - Cleanup on failure: chmod + rm -rf rootfs + remove override plugin
+- Plugin parser fix: handle both TARBALL_URL[arch] (legacy associative array)
+  and TARBALL_URL_arch (flat) formats — on-device plugins use legacy format
+- Binary: 843KB (was 770KB, +73KB for install logic)
+- All 32 tests pass
+
+Verified on device (, Android 16, aarch64):
+- pr-cli list: 14 distros with colors
+- pr-cli install alpine: download flow works, 3 retries, cleanup on failure
+- pr-cli install nonexistent: proper error message
+- Network download fails from run-as (expected, runas_app has no network access)
+  — real install test requires app process (ProcessBuilder), deferred to T6.8
 
 ### T6.5 — `command_login`
 
