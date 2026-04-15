@@ -21,6 +21,8 @@
  */
 
 #include <errno.h>       /* errno(3), E* */
+#include <fcntl.h>       /* open, O_* */
+#include <unistd.h>      /* close */
 #include <sys/utsname.h> /* struct utsname, */
 #include <linux/net.h>   /* SYS_*, */
 #include <linux/ioctl.h> /* _IOW, */

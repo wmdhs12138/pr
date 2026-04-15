@@ -26,6 +26,7 @@
 #include <errno.h>       /* errno(3), E* */
 
 #include "syscall/syscall.h"
+#include "syscall/sysnum.h"
 #include "syscall/chain.h"
 #include "extension/extension.h"
 #include "tracee/tracee.h"
