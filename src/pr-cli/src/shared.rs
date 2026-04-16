@@ -51,6 +51,10 @@ pub fn get_native_bash() -> String {
     format!("{}/libbash.so", get_native_lib_dir())
 }
 
+pub fn get_native_loader() -> String {
+    format!("{}/libproot-loader.so", get_native_lib_dir())
+}
+
 pub fn msg_status(text: &str) {
     println!(
         "{}\x1b[1;34m[\x1b[32m*\x1b[1;34m\x1b[36m {}\x1b[0m",

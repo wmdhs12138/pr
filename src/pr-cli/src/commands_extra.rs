@@ -6,7 +6,7 @@ use std::process::Command;
 
 use crate::plugin::load_plugins;
 use crate::shared::{
-    get_bin_dir, get_download_cache_dir, get_installed_rootfs_dir, get_native_busybox,
+    get_download_cache_dir, get_installed_rootfs_dir, get_native_busybox,
     get_plugins_dir, msg_error, msg_status,
 };
 

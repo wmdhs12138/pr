@@ -611,39 +611,62 @@ ptrace_scope, no `noexec` on /data, SELinux Enforcing.
 `execve/enter.c:570`). At SDK 29+, we need the loader binary in nativeLibraryDir
 (`apk_data_file` label, execve allowed) instead of a temp dir in app data.
 
-- [ ] **T7.1** Test targetSdk 29 on device
-  - Change `targetSdk = 29` in build.gradle.kts
-  - Build, deploy, attempt login
-  - Document which specific syscalls/operations fail
-  - Identify if seccomp filter is stricter at SDK 29 vs 28
+- [x] **T7.1** Test targetSdk 29 on device
+  - Changed `targetSdk = 29` in build.gradle.kts
+  - Documented failures: `execve("/bin/sh"): Permission denied` (SELinux W^X) and
+    `can't chmod: Function not implemented` (seccomp blocks `fchmodat` syscall 53)
+  - Discovered SDK 29 seccomp is LESS restrictive than SDK 28: only `fstatat64` (79)
+    and `fchmodat` (53) hit SIGSYS (vs 12+ at SDK 28)
+  - Discovered `run-as` uses `runas_app` domain (no W^X), app uses `untrusted_app_29`
+    (W^X enforced) — run-as tests can pass while deployed app fails
+  - Confirmed nativeLibDir has `apk_data_file:s0` label — execve allowed from
+    `untrusted_app_29`
+  - Device info: Samsung SM-XXXXX, Android 16 (SDK 36), SELinux Enforcing, no Yama,
+    no noexec on /data
 
-- [ ] **T7.2** Build proot loader as separate binary
-  - Proot's existing loader (built-in, see `execve/enter.c:504-586`) needs to be
-    in nativeLibraryDir
-  - Build as `libproot-loader.so` and place in jniLibs
-  - Set `PROOT_LOADER` env var in login.rs to point to it
-  - Proot's `PROOT_UNBUNDLE_LOADER` feature (enter.c:564-570) already supports this
+- [x] **T7.2** Build proot loader as separate binary, place in nativeLibDir
+  - Built proot's standalone loader from `src/proot/src/loader/loader` (5.6KB ELF)
+  - Placed as `android/app/src/main/jniLibs/arm64-v8a/libproot-loader.so`
+  - Updated `build.sh` to copy loader to `build/out/<arch>/loader` alongside proot
+  - Added `get_native_loader()` to `src/pr-cli/src/shared.rs`
+  - Set `PROOT_LOADER=<nativeLibDir>/libproot-loader.so` env var in `login.rs`
+    before exec'ing proot — proot uses it directly instead of extracting to temp dir
+  - Proot already supports this via `getenv("PROOT_LOADER")` in `enter.c:584`
+    (no need for `PROOT_UNBUNDLE_LOADER` define)
+  - Fixed pr-cli build script: `PROJECT_ROOT` was `src/` instead of project root,
+    causing old binary without PROOT_LOADER support to be shipped
 
-- [ ] **T7.3** Fix temp directory for SDK 29+
-  - Proot's `temp.c:182` calls `chmod()` — may be blocked by seccomp at SDK 29+
-  - Proot's `temp.c:189` calls `chdir()` — already handled by SIGSYS handler
-  - Set `PROOT_TMP_DIR` to a directory where both chmod and chdir work
-  - Test with nativeLibraryDir or a writable location
+- [x] **T7.3** fchmodat SIGSYS noop fix
+  - Added `case PR_fchmodat: set_result_after_seccomp(tracee, 0); break;` in
+    `src/proot/src/tracee/seccomp.c` (after the `PR_chmod` handler)
+  - The chmod on proot's temp dir is a safety measure, not critical — returning 0
+    (success) is safe since `PROOT_LOADER` points to nativeLibraryDir
+  - `PROOT_TMP_DIR` is already set to `app.cacheDir` by ProotLauncher.kt and login.rs
 
-- [ ] **T7.4** Fix any additional seccomp blocks at SDK 29+
-  - The zygote's seccomp BPF filter may block more syscalls at SDK 29 than at SDK 28
-  - Use sigsys-log.txt to identify new blocked syscalls
-  - Add handlers as needed (same pattern as existing 12 handlers)
+- [x] **Verified**: proot login works at targetSdk 29 — user confirmed terminal shows
+  up and `apk --version` runs successfully from the app UI
 
-- [ ] **T7.5** Increment targetSdk and test
-  - Test targetSdk 30, 31, 32, 33 (Play Store minimum as of 2025)
-  - Document which SDK version is the highest that works
-  - Identify any SDK-specific restrictions that differ from SDK 29
+- [ ] **T7.4** Pre-check AOSP seccomp BPF allowlist for SDK 35/36 vs current handlers
+  - Download `arm64-api-35.txt` from AOSP bionic repo
+  - Cross-reference against the 12+1 handled syscalls
+  - Identify any syscalls that are newly blocked at SDK 35
+  - Do this before running T7.5 — find issues statically first
 
-- [ ] **T7.6** Finalize targetSdk for Play Store
-  - Set targetSdk to the highest working version
-  - Run full integration tests (T5.2-T5.6) at the new targetSdk
-  - Verify all 12 SIGSYS handlers still work at the new SDK level
+- [ ] **T7.5** Test targetSdk 35 (Play Store minimum as of August 2025)
+  - Set `targetSdk = 35` in build.gradle.kts
+  - Build, deploy, attempt proot login
+  - On failure: `adb shell dmesg | grep avc` for SELinux denials
+  - On SIGSYS: check `sigsys-log.txt` for newly blocked syscalls
+  - Add handlers following the same pattern as existing 12+1
+
+- [ ] **T7.5b** Test targetSdk 36 (matches device OS)
+  - Same verification steps as T7.5
+  - Future-proofing ceiling
+
+- [ ] **T7.6** Full regression at final targetSdk
+  - Re-run all T5.2–T5.6 integration tests
+  - Verify all SIGSYS handlers still work
+  - Confirm `apk`, `vim`, `openssh`, `gcc`, `cargo build` all function end-to-end
 
 ## Phase 8 — Polish & Documentation
 

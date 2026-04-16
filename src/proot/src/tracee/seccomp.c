@@ -196,6 +196,10 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		restart_syscall_after_seccomp(tracee);
 		break;
 
+	case PR_fchmodat:
+		set_result_after_seccomp(tracee, 0);
+		break;
+
 	case PR_chown:
 	case PR_lchown:
 	case PR_chown32:

@@ -249,6 +249,11 @@ build_proot() {
     cp "${SRC_DIR}/src/proot" "${out_dir}/proot"
     chmod 755 "${out_dir}/proot"
 
+    if [ -f "${SRC_DIR}/src/loader/loader" ]; then
+        cp "${SRC_DIR}/src/loader/loader" "${out_dir}/loader"
+        chmod 755 "${out_dir}/loader"
+    fi
+
     info "Built: ${out_dir}/proot ($(du -h "${out_dir}/proot" | cut -f1))"
 }
 

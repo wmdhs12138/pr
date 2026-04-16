@@ -352,6 +352,7 @@ pub fn command_login(
 
     let l2s_dir = std::env::var("PROOT_L2S_DIR").unwrap_or_default();
 
+    let loader_path = get_native_loader();
     android_log(&format!("exec: proot {} (cwd=/)", full_args.join(" ")));
 
     // Build env vars for the proot child
@@ -380,6 +381,7 @@ pub fn command_login(
         .env("PROOT_L2S_DIR", &l2s_dir)
         .env("PROOT_TMP_DIR", &cache_dir)
         .env("TMPDIR", &cache_dir)
+        .env("PROOT_LOADER", &loader_path)
         .args(&full_args);
 
     for (k, v) in &child_env {
