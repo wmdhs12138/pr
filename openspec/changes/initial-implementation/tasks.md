@@ -597,7 +597,55 @@ Verified on device (, Android 16, aarch64):
 - [x] Bump BOOTSTRAP_VERSION to 8
 - [x] Total APK savings: ~4.1MB
 
-## Phase 7 — Polish & Documentation
+## Phase 7 — targetSdk 29+ (Google Play Store Compatibility)
+
+At targetSdk 28, SELinux does not enforce W^X on app data files, so proot can execve
+binaries inside the rootfs. At targetSdk 29+, SELinux blocks execve on `app_data_file`
+labeled paths (the rootfs in `/data/data/<pkg>/files/`), breaking proot's exec.
+
+**Current status**: All T5.2 tests pass at targetSdk 28. 12 seccomp SIGSYS handlers
+are working. Device info gathered: Samsung SM-XXXXX, Android 16 (SDK 36), no Yama
+ptrace_scope, no `noexec` on /data, SELinux Enforcing.
+
+**Key insight**: Proot already has a loader mechanism (`PROOT_LOADER` env var in
+`execve/enter.c:570`). At SDK 29+, we need the loader binary in nativeLibraryDir
+(`apk_data_file` label, execve allowed) instead of a temp dir in app data.
+
+- [ ] **T7.1** Test targetSdk 29 on device
+  - Change `targetSdk = 29` in build.gradle.kts
+  - Build, deploy, attempt login
+  - Document which specific syscalls/operations fail
+  - Identify if seccomp filter is stricter at SDK 29 vs 28
+
+- [ ] **T7.2** Build proot loader as separate binary
+  - Proot's existing loader (built-in, see `execve/enter.c:504-586`) needs to be
+    in nativeLibraryDir
+  - Build as `libproot-loader.so` and place in jniLibs
+  - Set `PROOT_LOADER` env var in login.rs to point to it
+  - Proot's `PROOT_UNBUNDLE_LOADER` feature (enter.c:564-570) already supports this
+
+- [ ] **T7.3** Fix temp directory for SDK 29+
+  - Proot's `temp.c:182` calls `chmod()` — may be blocked by seccomp at SDK 29+
+  - Proot's `temp.c:189` calls `chdir()` — already handled by SIGSYS handler
+  - Set `PROOT_TMP_DIR` to a directory where both chmod and chdir work
+  - Test with nativeLibraryDir or a writable location
+
+- [ ] **T7.4** Fix any additional seccomp blocks at SDK 29+
+  - The zygote's seccomp BPF filter may block more syscalls at SDK 29 than at SDK 28
+  - Use sigsys-log.txt to identify new blocked syscalls
+  - Add handlers as needed (same pattern as existing 12 handlers)
+
+- [ ] **T7.5** Increment targetSdk and test
+  - Test targetSdk 30, 31, 32, 33 (Play Store minimum as of 2025)
+  - Document which SDK version is the highest that works
+  - Identify any SDK-specific restrictions that differ from SDK 29
+
+- [ ] **T7.6** Finalize targetSdk for Play Store
+  - Set targetSdk to the highest working version
+  - Run full integration tests (T5.2-T5.6) at the new targetSdk
+  - Verify all 12 SIGSYS handlers still work at the new SDK level
+
+## Phase 8 — Polish & Documentation
 
 - [ ] **T7.1** Rootfs mirror setup
   - Configure pr.oo.or.id/dl/rootfs/ as fallback mirror
@@ -627,36 +675,16 @@ Verified on device (, Android 16, aarch64):
   - Create first release APK
   - Push to github.com/oonid/pr releases
 
-## Phase 8 — mksh Port of proot-distro.sh (Optional Alternative)
+## Phase 9 — mksh Port of proot-distro.sh (CANCELLED)
 
-This is the alternative to Phase 6's Rust approach. Only needed if we decide
-against Rust. The mksh port is fragile (eval-heavy associative array simulation)
-and harder to maintain, but avoids adding a Rust toolchain dependency.
+This phase was the alternative to Phase 6's Rust approach. Since Phase 6 (pr-cli) is
+complete and working, the mksh port is no longer needed. Rust gives us type safety,
+testability, and avoids the entire shell compatibility problem.
 
-Android's `untrusted_app` SELinux domain blocks `execve()` of binaries in
-app-writable directories. The app process can only exec `/system/bin/sh` (mksh
-R59 2020/10/31). Bash in nativeLibraryDir works from `run-as` (which uses
-`runas_app` context) but is killed with SIGSYS (exit 159) when exec'd from the
-app process via ProcessBuilder.
+~~Key mksh R59 limitations that made this approach fragile:~~
+- ~~No `typeset -A` / `declare -A` (associative arrays) — silently corrupts data~~
+- ~~No `mapfile` / `readarray`, no process substitution, no `${!var}` indirect expansion~~
+- ~~mksh parses the ENTIRE script before executing — bash-isms in any function break all~~
 
-**Goal:** Make proot-distro.sh fully compatible with mksh R59 so it can be
-invoked as `/system/bin/sh proot-distro.sh ...` from the app process.
-
-**Key mksh R59 limitations discovered:**
-- No `typeset -A` / `declare -A` (associative arrays) — silently corrupts data
-- No `mapfile` / `readarray`
-- No process substitution `< <(...)`
-- No `${!var}` indirect expansion
-- No `[[ =~ ]]` regex match
-- No `local -a` (use plain `local`)
-- Here-docs with command substitution need writable `TMPDIR`
-- Plugin array keys must NOT be quoted: `x[aarch64]` OK, `x['aarch64']` NOT OK
-- mksh parses the ENTIRE script before executing — bash-isms in `command_login()`
-  break `command_install()` too
-
-- [ ] **T8.1** Replace associative arrays with flat variables and eval helpers
-- [ ] **T8.2** Fix remaining mksh incompatibilities in proot-distro.sh
-- [ ] **T8.3** Update plugin loading for flat variables
-- [ ] **T8.4** Test proot-distro.sh under mksh R59 on device
-- [ ] **T8.5** Test install from app UI via ProcessBuilder with `/system/bin/sh`
-- [ ] **T8.6** Test login from app UI
+**Superseded by**: Phase 6 — pr-cli Rust binary (903KB, all 32 tests passing, full
+install/login/remove/backup/restore/rename/copy/clear-cache working).
