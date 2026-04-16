@@ -352,62 +352,6 @@
   - Root cause: proot core ptrace limitation with `clone(CLONE_VM)` — not targetSdk related
   - Tracked as Phase 8 (T8.1) for proot vfork/CLONE_VM fix
 
-## Phase 8 — Fix vfork/CLONE_VM in proot for Rust Toolchain Support
-
-`cargo build` fails inside proot because Rust's `std::process::Command` uses
-`clone(CLONE_VM|CLONE_VFORK)` (equivalent to `vfork`) instead of `fork`. This breaks
-proot's ptrace handling of nested process spawning — after a vfork'd child does execve,
-the resulting process cannot properly spawn children via `posix_spawnp` (returns ENOSYS).
-
-### Diagnosis
-
-Tested on Samsung SM-XXXXX, Android 16, targetSdk 35, Alpine rootfs:
-
-| Spawning method | Direct child | Nested child (cc1) |
-|---|---|---|
-| `fork()` + `execve()` (shell) | ✅ works | ✅ works |
-| `posix_spawn()` (musl) | ✅ works | ✅ works |
-| `vfork()` + `execve()` (Rust) | ✅ child starts | ❌ ENOSYS |
-
-Rust's `Command` uses `posix_spawn` when no file descriptors are modified (simple case).
-But when stdout is piped (e.g., `cargo` capturing `rustc -vV` output), Rust falls back to
-`clone(CLONE_VM|CLONE_VFORK|SIGCHLD)` + `execve`, which triggers the proot bug.
-
-After `vfork+execve`, the resulting process (e.g., `cc`) appears to run fine, but its
-own internal `posix_spawnp("cc1")` calls fail with ENOSYS. This means the proot ptrace
-state is corrupted or incomplete for processes created via `clone(CLONE_VM)`.
-
-Test files: `docs/pspawn.c` (posix_spawn test), `docs/vfork_test.c` (vfork test)
-
-### What works inside proot
-
-- `gcc` compilation (C/C++) ✅ — shell uses `fork`, gcc uses `posix_spawn` for cc1
-- `rustc -vV` ✅ — version print, no subprocess
-- `rustc --emit=obj` ✅ — compile to object file, no linker
-- `rustc -C linker=/usr/bin/cc` ✅ — explicit linker, but only from shell (not cargo)
-
-### What doesn't work
-
-- `cargo build` ❌ — cargo uses `clone(CLONE_VM)` to spawn `rustc`, breaking nesting
-- Any Rust program using `Command::new().stdout(Stdio::piped())` inside proot ❌
-
-### Implementation Plan
-
-- [ ] **T8.1** Intercept `clone(CLONE_VM)` in proot and strip `CLONE_VM` flag
-  - In proot's syscall handler for `clone`, detect when `CLONE_VM` is set
-  - Strip `CLONE_VM` from the clone flags (turn `vfork` into `fork`)
-  - This makes Rust's `clone(CLONE_VM|CLONE_VFORK)` behave as `clone(CLONE_VFORK)`
-  - The child still blocks the parent (CLONE_VFORK), but gets its own address space
-  - Risk: slight performance impact, but correctness over performance
-  - Test: verify cargo build works after the change
-  - Test: verify existing functionality (apk, gcc, ssh) still works
-
-- [ ] **T8.2** Test full Rust toolchain after T8.1 fix
-  - `cargo build` on a simple hello-world project
-  - `cargo build` on a project with dependencies
-  - Verify no regression in C/C++ compilation
-  - Verify no regression in proot login/session stability
-
 ## Phase 6 — Replace proot-distro.sh with Rust Binary (pr-cli)
 
 Viability confirmed (see `docs/bash-to-rust.md`): a statically-linked Rust binary
@@ -759,6 +703,74 @@ ptrace_scope, no `noexec` on /data, SELinux Enforcing.
     fails when spawning `rustc` subprocess for compilation. Not a targetSdk regression
     (same issue at SDK 28). Tracked as T5.7.
   - SIGSYS log: empty (no unexpected events)
+
+## Phase 8 — Fix vfork/CLONE_VM in proot for Rust Toolchain Support
+
+`cargo build` fails inside proot because Rust's `std::process::Command` uses
+`clone(CLONE_VM|CLONE_VFORK)` (equivalent to `vfork`) instead of `fork`. This breaks
+proot's ptrace handling of nested process spawning — after a vfork'd child does execve,
+the resulting process cannot properly spawn children via `posix_spawnp` (returns ENOSYS).
+
+### Diagnosis
+
+Tested on Samsung SM-XXXXX, Android 16, targetSdk 35, Alpine rootfs:
+
+| Spawning method | Direct child | Nested child (cc1) |
+|---|---|---|
+| `fork()` + `execve()` (shell) | ✅ works | ✅ works |
+| `posix_spawn()` (musl) | ✅ works | ✅ works |
+| `vfork()` + `execve()` (Rust) | ✅ child starts | ❌ ENOSYS |
+
+Rust's `Command` uses `posix_spawn` when no file descriptors are modified (simple case).
+But when stdout is piped (e.g., `cargo` capturing `rustc -vV` output), Rust falls back to
+`clone(CLONE_VM|CLONE_VFORK|SIGCHLD)` + `execve`, which triggers the proot bug.
+
+After `vfork+execve`, the resulting process (e.g., `cc`) appears to run fine, but its
+own internal `posix_spawnp("cc1")` calls fail with ENOSYS. This means the proot ptrace
+state is corrupted or incomplete for processes created via `clone(CLONE_VM)`.
+
+Test files: `docs/pspawn.c` (posix_spawn test), `docs/vfork_test.c` (vfork test)
+
+### What works inside proot
+
+- `gcc` compilation (C/C++) ✅ — shell uses `fork`, gcc uses `posix_spawn` for cc1
+- `rustc -vV` ✅ — version print, no subprocess
+- `rustc --emit=obj` ✅ — compile to object file, no linker
+- `rustc -C linker=/usr/bin/cc` ✅ — explicit linker, but only from shell (not cargo)
+
+### What doesn't work
+
+- `cargo build` ❌ — cargo uses `clone(CLONE_VM)` to spawn `rustc`, breaking nesting
+- Any Rust program using `Command::new().stdout(Stdio::piped())` inside proot ❌
+
+### Implementation Plan
+
+- [x] **T8.1** Intercept `clone(CLONE_VM|CLONE_VFORK)` in proot and strip both flags
+  - Added `PR_clone` and `PR_clone3` cases in `src/proot/src/syscall/enter.c:150-171`
+  - Strips `CLONE_VM` and `CLONE_VFORK` from clone flags when `CLONE_THREAD` is NOT set
+  - `CLONE_THREAD` guard prevents breaking thread creation (which requires `CLONE_VM`)
+  - Converts `vfork`-style process spawns into regular `fork`, which proot handles correctly
+  - Verified: `cargo build` works on a hello-world project (2.0s compile time)
+  - Verified: regression tests pass (apk, vim, gcc all work)
+  - Side effect: gcc's prefix resolution is broken by link2symlink (tracked as T8.2)
+
+- [ ] **T8.2** Fix GCC prefix resolution broken by link2symlink
+  - `cc -print-search-dirs` shows `/.l2s/../lib/gcc/...` instead of `/usr/lib/gcc/...`
+  - Root cause: proot's link2symlink extension makes `/proc/self/exe` resolve to the
+    `.l2s.` symlink path, causing gcc's `make_relative_prefix()` to compute wrong prefix
+  - Workaround: set `COMPILER_PATH` and `LIBRARY_PATH` environment variables:
+    - `COMPILER_PATH=/usr/libexec/gcc/aarch64-alpine-linux-musl/15.2.0/`
+    - `LIBRARY_PATH=/usr/lib/gcc/aarch64-alpine-linux-musl/15.2.0:/usr/lib/gcc/aarch64-alpine-linux-musl/15.2.0/../../../../aarch64-alpine-linux-musl/lib:/lib:/usr/lib`
+  - Possible fixes: (A) fix `/proc/self/exe` virtualization in proot to return the
+    guest path instead of the `.l2s.` host path, (B) document env vars as required
+    for Rust/C++ toolchain usage, (C) have pr-cli set these env vars automatically
+  - Impact: gcc/rustc compilation works with env vars, fails without them
+
+- [ ] **T8.3** Test full Rust toolchain after T8.1 fix
+  - `cargo build` on a simple hello-world project
+  - `cargo build` on a project with dependencies
+  - Verify no regression in C/C++ compilation
+  - Verify no regression in proot login/session stability
 
 ## Phase 9 — Polish & Documentation
 
