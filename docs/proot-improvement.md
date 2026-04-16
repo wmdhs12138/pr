@@ -50,6 +50,7 @@ like `setsockopt`, `socket`, `bind`, `connect`, `mount`, `chroot`, `clone`, `for
 | `PR_chdir` | `chdir` | 49 | Translate path, update `tracee->fs->cwd` via talloc, return success |
 | `PR_fchdir` | `fchdir` | 50 | Resolve dirfd to path, update cwd, return success |
 | `PR_linkat` | `linkat` | 37 | Translate paths, try `renameat()`, fallback to copy+delete on EXDEV/EACCES |
+| `PR_getcwd` | `getcwd` | 17 | Read `tracee->fs->cwd`, write to tracee buffer, return length |
 | `PR_faccessat2` | `faccessat2` | 439 | Downgrade to `faccessat` (drop flags arg) and restart |
 | `PR_renameat2` | `renameat2` | 276 | Downgrade to `renameat` (drop flags arg) and restart |
 | `PR_process_madvise` | `process_madvise` | 440 | Return 0 (noop — advisory syscall) |
@@ -63,6 +64,22 @@ duplication, and sets the result to 0.
 
 **fchdir**: Same as chdir but uses a directory file descriptor. Resolves the fd to a path
 using `readlink("/proc/self/fd/N")`, translates, and updates cwd.
+
+**getcwd**: The zygote blocks `getcwd`. The handler reads proot's tracked cwd from
+`tracee->fs->cwd`, verifies the path still exists via `translate_path()`, writes the cwd
+string to the tracee's output buffer, and returns the string length. Without this handler,
+`apk` trigger scripts that call `getcwd()` fail with ENOSYS.
+
+### aarch64 SYSARG_1/x0 clobber fix
+
+On aarch64, `SYSARG_1` (x0) and `SYSARG_RESULT` (x0) share the same physical register.
+At SIGSYS time, the kernel may have modified x0 before proot reads it. This caused handlers
+to read clobbered values — e.g. `fchdir(3)` appeared as `fchdir(0)` (stdin).
+
+**Fix**: All handlers that read `SYSARG_1` now use `ORIGINAL` register version (saved by
+`save_current_regs(ORIGINAL_SECCOMP_REWRITE)` right after `fetch_regs()`) instead of
+`CURRENT`. Affected handlers: `PR_chdir`, `PR_fchdir`, `PR_linkat`. `SYSARG_2`-`SYSARG_6`
+(x1-x5) are NOT affected since they don't overlap with the result register.
 
 **linkat**: Alpine's `apk` uses `linkat` for atomic file replacement (create temp file,
 hard-link to target, unlink temp). SELinux blocks hard links on `app_data_file`, and

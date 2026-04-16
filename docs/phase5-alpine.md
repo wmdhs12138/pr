@@ -53,11 +53,16 @@ These syscalls trigger SIGSYS (SECCOMP_RET_TRAP) from the zygote's seccomp filte
 
 | Syscall | Number | SIGSYS handler | Strategy |
 |---------|--------|---------------|----------|
+| `getcwd` | 17 | Yes | Read `tracee->fs->cwd`, write to tracee buffer, return length |
+| `chdir` | 49 | Yes | Translate path, update `tracee->fs->cwd`, return 0 |
+| `fchdir` | 50 | Yes | Resolve dirfd to path, update cwd, return 0 |
+| `linkat` | 37 | Yes | Translate paths, try renameat(), fallback to copy+delete |
 | `faccessat2` | 439 | Yes | Downgrade to `faccessat` (drop flags) |
 | `renameat2` | 276 | Yes | Downgrade to `renameat` (drop flags) |
 | `process_madvise` | 440 | Yes | Return 0 (noop — advisory) |
 | `setgid` | 144 | Yes (default) | Return -ENOSYS |
 | `setuid` | 146 | Yes (default) | Return -ENOSYS |
+| `memfd_create` | 279 | Yes (default) | Return -ENOSYS |
 | `openat` | 56 | Yes (default) | Return **-ENOENT** (not -ENOSYS!) |
 | `fstatat64` | 79 | Yes (default) | Return **-ENOENT** (not -ENOSYS!) |
 
@@ -80,8 +85,10 @@ important thing is that returning ENOENT instead of ENOSYS makes the failure non
 | `apk update` | Works | Works (fixed) |
 | `apk add vim` | Works | Works (fixed) |
 | `apk del vim` | Works | Works (fixed) |
+| `apk add openssh` | Works | Works (fixed) |
 | `vim --version` | Works | Works (fixed) |
-| `curl --version` | Works | Works |
+| `curl --version` | Works | Works (fixed) |
+| `ssh -V` | Works | Works (fixed) |
 | `busybox wget HTTP` | Works | Works |
 | `busybox wget HTTPS` | Works | ENOSYS (can't exec ssl_client) |
 | `ssl_client` direct exec | Works | Works |

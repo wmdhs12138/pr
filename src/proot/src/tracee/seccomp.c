@@ -569,7 +569,7 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		char translated[PATH_MAX];
 		int size;
 
-		size = read_string(tracee, path, peek_reg(tracee, CURRENT, SYSARG_1), PATH_MAX);
+		size = read_string(tracee, path, peek_reg(tracee, ORIGINAL, SYSARG_1), PATH_MAX);
 		if (size < 0) {
 			set_result_after_seccomp(tracee, size);
 			break;
@@ -606,7 +606,7 @@ static int handle_seccomp_event_common(Tracee *tracee)
 	{
 		char path[PATH_MAX];
 		char translated[PATH_MAX];
-		int dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+		int dirfd = peek_reg(tracee, ORIGINAL, SYSARG_1);
 		int status2;
 
 		strcpy(path, ".");
@@ -639,7 +639,7 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		char newpath[PATH_MAX];
 		char old_translated[PATH_MAX];
 		char new_translated[PATH_MAX];
-		int olddirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+		int olddirfd = peek_reg(tracee, ORIGINAL, SYSARG_1);
 		int newdirfd = peek_reg(tracee, CURRENT, SYSARG_3);
 		int flags = peek_reg(tracee, CURRENT, SYSARG_5);
 		int size;
@@ -700,6 +700,38 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		} else {
 			set_result_after_seccomp(tracee, -errno);
 		}
+		break;
+	}
+
+	case PR_getcwd:
+	{
+		size_t size = (size_t) peek_reg(tracee, ORIGINAL, SYSARG_2);
+		if (size == 0) {
+			set_result_after_seccomp(tracee, -EINVAL);
+			break;
+		}
+
+		char path[PATH_MAX];
+		int status2 = translate_path(tracee, path, AT_FDCWD, ".", false);
+		if (status2 < 0) {
+			set_result_after_seccomp(tracee, status2);
+			break;
+		}
+
+		size_t new_size = strlen(tracee->fs->cwd) + 1;
+		if (size < new_size) {
+			set_result_after_seccomp(tracee, -ERANGE);
+			break;
+		}
+
+		word_t output = peek_reg(tracee, ORIGINAL, SYSARG_1);
+		status2 = write_data(tracee, output, tracee->fs->cwd, new_size);
+		if (status2 < 0) {
+			set_result_after_seccomp(tracee, status2);
+			break;
+		}
+
+		set_result_after_seccomp(tracee, new_size);
 		break;
 	}
 

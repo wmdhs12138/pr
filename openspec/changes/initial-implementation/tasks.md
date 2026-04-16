@@ -307,10 +307,15 @@
   - Install Alpine via app UI
   - Login and verify shell works
   - Run `apk update && apk add vim`
+  - Run `apk add openssh` — verify openssh installs successfully
   - Remove Alpine
-  - **Progress**: Fixed root cause of `apk update` ENOSYS — zygote seccomp blocks
-    `faccessat2`/`renameat2`; added downgrade handlers in proot's SIGSYS handler.
-    Proot rebuilt and deployed. Needs on-device verification.
+  - **Progress**: All seccomp SIGSYS handlers working.
+    - `apk update` / `apk add vim` / `apk del vim` / `apk add curl` / `apk add openssh` all pass with 0 errors.
+    - `vim --version` / `curl --version` / `ssh -V` all work.
+    - Fixes applied:
+      1. SIGSYS default returns ENOENT for openat/fstatat64 (musl ldso path search)
+      2. SYSARG_1/x0 clobber fix: chdir/fchdir/linkat read from ORIGINAL registers
+      3. PR_getcwd SIGSYS handler added (reads tracee->fs->cwd)
 
 - [ ] **T5.3** Integration test: Debian
   - Install Debian via app UI
