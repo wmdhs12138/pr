@@ -340,6 +340,74 @@
   - Verify /sdcard, /system, /vendor are NOT accessible
   - Verify /usr, /bin, /etc are accessible
 
+- [x] **T5.7** Investigate and fix cargo build inside proot
+  - Investigated: `cargo build` fails because Rust's `std::process::Command` uses
+    `clone(CLONE_VM|CLONE_VFORK)` (vfork semantics), which breaks proot's ptrace
+    handling of nested process spawning.
+  - Verified: `posix_spawn` works ✅, `fork+execve` works ✅, `vfork+execve` breaks
+    nested spawning ❌ (gcc's internal `posix_spawnp("cc1")` returns ENOSYS)
+  - `rustc -vV` works, `rustc --emit=obj` works, `rustc -C linker=/usr/bin/cc` works
+  - Only `cargo build` fails — cargo uses piped stdout for rustc invocation, forcing
+    the vfork code path instead of posix_spawn
+  - Root cause: proot core ptrace limitation with `clone(CLONE_VM)` — not targetSdk related
+  - Tracked as Phase 8 (T8.1) for proot vfork/CLONE_VM fix
+
+## Phase 8 — Fix vfork/CLONE_VM in proot for Rust Toolchain Support
+
+`cargo build` fails inside proot because Rust's `std::process::Command` uses
+`clone(CLONE_VM|CLONE_VFORK)` (equivalent to `vfork`) instead of `fork`. This breaks
+proot's ptrace handling of nested process spawning — after a vfork'd child does execve,
+the resulting process cannot properly spawn children via `posix_spawnp` (returns ENOSYS).
+
+### Diagnosis
+
+Tested on Samsung SM-XXXXX, Android 16, targetSdk 35, Alpine rootfs:
+
+| Spawning method | Direct child | Nested child (cc1) |
+|---|---|---|
+| `fork()` + `execve()` (shell) | ✅ works | ✅ works |
+| `posix_spawn()` (musl) | ✅ works | ✅ works |
+| `vfork()` + `execve()` (Rust) | ✅ child starts | ❌ ENOSYS |
+
+Rust's `Command` uses `posix_spawn` when no file descriptors are modified (simple case).
+But when stdout is piped (e.g., `cargo` capturing `rustc -vV` output), Rust falls back to
+`clone(CLONE_VM|CLONE_VFORK|SIGCHLD)` + `execve`, which triggers the proot bug.
+
+After `vfork+execve`, the resulting process (e.g., `cc`) appears to run fine, but its
+own internal `posix_spawnp("cc1")` calls fail with ENOSYS. This means the proot ptrace
+state is corrupted or incomplete for processes created via `clone(CLONE_VM)`.
+
+Test files: `docs/pspawn.c` (posix_spawn test), `docs/vfork_test.c` (vfork test)
+
+### What works inside proot
+
+- `gcc` compilation (C/C++) ✅ — shell uses `fork`, gcc uses `posix_spawn` for cc1
+- `rustc -vV` ✅ — version print, no subprocess
+- `rustc --emit=obj` ✅ — compile to object file, no linker
+- `rustc -C linker=/usr/bin/cc` ✅ — explicit linker, but only from shell (not cargo)
+
+### What doesn't work
+
+- `cargo build` ❌ — cargo uses `clone(CLONE_VM)` to spawn `rustc`, breaking nesting
+- Any Rust program using `Command::new().stdout(Stdio::piped())` inside proot ❌
+
+### Implementation Plan
+
+- [ ] **T8.1** Intercept `clone(CLONE_VM)` in proot and strip `CLONE_VM` flag
+  - In proot's syscall handler for `clone`, detect when `CLONE_VM` is set
+  - Strip `CLONE_VM` from the clone flags (turn `vfork` into `fork`)
+  - This makes Rust's `clone(CLONE_VM|CLONE_VFORK)` behave as `clone(CLONE_VFORK)`
+  - The child still blocks the parent (CLONE_VFORK), but gets its own address space
+  - Risk: slight performance impact, but correctness over performance
+  - Test: verify cargo build works after the change
+  - Test: verify existing functionality (apk, gcc, ssh) still works
+
+- [ ] **T8.2** Test full Rust toolchain after T8.1 fix
+  - `cargo build` on a simple hello-world project
+  - `cargo build` on a project with dependencies
+  - Verify no regression in C/C++ compilation
+  - Verify no regression in proot login/session stability
+
 ## Phase 6 — Replace proot-distro.sh with Rust Binary (pr-cli)
 
 Viability confirmed (see `docs/bash-to-rust.md`): a statically-linked Rust binary
@@ -692,43 +760,37 @@ ptrace_scope, no `noexec` on /data, SELinux Enforcing.
     (same issue at SDK 28). Tracked as T5.7.
   - SIGSYS log: empty (no unexpected events)
 
-- [ ] **T5.7** Investigate and fix cargo build inside proot
-  - `rustc` subprocess exec fails with ENOSYS during `cargo build`
-  - Likely related to proot's ptrace/link2symlink handling of rustc's process spawning
-  - gcc compilation works fine — issue is specific to Rust toolchain
-  - Not a targetSdk regression — pre-existing proot limitation
+## Phase 9 — Polish & Documentation
 
-## Phase 8 — Polish & Documentation
-
-- [ ] **T7.1** Rootfs mirror setup
+- [ ] **T9.1** Rootfs mirror setup
   - Configure pr.oo.or.id/dl/rootfs/ as fallback mirror
   - Add mirror URL configuration to app settings
 
-- [ ] **T7.2** Error handling
+- [ ] **T9.2** Error handling
   - Handle download failures gracefully
   - Handle extraction failures (clean up partial rootfs)
   - Handle proot crash (inform user)
   - Handle SELinux ptrace denial (show explanatory message)
 
-- [ ] **T7.3** README and user documentation
+- [ ] **T9.3** README and user documentation
   - Write README.md for github.com/oonid/pr
   - Include project name explanation: pr = PRoot = ptrace-based root (see docs/name.md)
   - Document supported devices and known limitations
   - Document how to add custom distro plugins
   - Document how to build from source
 
-- [ ] **T7.4** CI/CD setup
+- [ ] **T9.4** CI/CD setup
   - GitHub Actions workflow for building proot binary
   - GitHub Actions workflow for building APK
   - Release automation
 
-- [ ] **T7.5** App signing and release
+- [ ] **T9.5** App signing and release
   - Generate signing key
   - Configure release build type
   - Create first release APK
   - Push to github.com/oonid/pr releases
 
-## Phase 9 — mksh Port of proot-distro.sh (CANCELLED)
+## Phase 10 — mksh Port of proot-distro.sh (CANCELLED)
 
 This phase was the alternative to Phase 6's Rust approach. Since Phase 6 (pr-cli) is
 complete and working, the mksh port is no longer needed. Rust gives us type safety,
