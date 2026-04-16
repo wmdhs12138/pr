@@ -303,19 +303,16 @@
   - Fixed __android_log_write linking: gated behind cfg(target_os = "android") for host testability
   - All 32 tests pass (12 unit + 20 integration) on host after cfg gate fix
 
-- [ ] **T5.2** Integration test: Alpine
-  - Install Alpine via app UI
-  - Login and verify shell works
-  - Run `apk update && apk add vim`
-  - Run `apk add openssh` — verify openssh installs successfully
-  - Remove Alpine
-  - **Progress**: All seccomp SIGSYS handlers working.
+- [x] **T5.2** Integration test: Alpine
+  - Install Alpine via app UI ✅
+  - Login and verify shell works ✅
+  - Run `apk update && apk add vim` ✅
+  - Run `apk add openssh` — verify openssh installs successfully ✅
+  - Remove Alpine ✅
+  - **Completed**: All seccomp SIGSYS handlers working on fresh Alpine install.
     - `apk update` / `apk add vim` / `apk del vim` / `apk add curl` / `apk add openssh` all pass with 0 errors.
     - `vim --version` / `curl --version` / `ssh -V` all work.
-    - Fixes applied:
-      1. SIGSYS default returns ENOENT for openat/fstatat64 (musl ldso path search)
-      2. SYSARG_1/x0 clobber fix: chdir/fchdir/linkat read from ORIGINAL registers
-      3. PR_getcwd SIGSYS handler added (reads tracee->fs->cwd)
+    - Fixes: ENOENT for openat/fstatat64, x0 clobber fix (chdir/fchdir/linkat), PR_getcwd handler.
 
 - [ ] **T5.3** Integration test: Debian
   - Install Debian via app UI
