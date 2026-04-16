@@ -93,37 +93,45 @@ Even at targetSdk=28, the Android zygote installs a BPF seccomp filter on the ap
 (which only disables proot's own seccomp filter, not the zygote's).
 
 **Blocked syscalls** (trigger SIGSYS from zygote filter):
-- `renameat2` (276) — **fixed**: proot SIGSYS handler downgrades to `renameat`
-- `faccessat2` (439) — **fixed**: proot SIGSYS handler downgrades to `faccessat`
-- `process_madvise` (440) — **fixed**: proot SIGSYS handler returns 0 (noop)
-- `setgid` (144) — returns -ENOSYS (harmless for our use case)
-- `setuid` (146) — returns -ENOSYS (harmless for our use case)
-- `openat` (56) — **fixed**: returns -ENOENT instead of -ENOSYS (see below)
-- `fstatat64` (79) — **fixed**: returns -ENOENT instead of -ENOSYS (see below)
+
+| Syscall | Number | Handler | Strategy |
+|---------|--------|---------|----------|
+| `getcwd` | 17 | `PR_getcwd` | Read `tracee->fs->cwd`, write to tracee buffer, return length |
+| `chdir` | 49 | `PR_chdir` | Translate path, update `tracee->fs->cwd`, return 0 |
+| `fchdir` | 50 | `PR_fchdir` | Resolve dirfd to path, update cwd, return 0 |
+| `linkat` | 37 | `PR_linkat` | Try `renameat()`, fallback to copy+delete on EXDEV/EACCES |
+| `renameat2` | 276 | `PR_renameat2` | Downgrade to `renameat` (drop flags) and restart |
+| `faccessat2` | 439 | `PR_faccessat2` | Downgrade to `faccessat` (drop flags) and restart |
+| `process_madvise` | 440 | `PR_process_madvise` | Return 0 (noop — advisory) |
+| `setgid` | 144 | default | Return -ENOSYS (harmless) |
+| `setuid` | 146 | default | Return -ENOSYS (harmless) |
+| `memfd_create` | 279 | default | Return -ENOSYS |
+| `openat` | 56 | default | Return **-ENOENT** (not -ENOSYS) |
+| `fstatat64` | 79 | default | Return **-ENOENT** (not -ENOSYS) |
 
 Note: original enosys_test incorrectly used 281 for process_madvise; 281 is execveat on arm64.
 
-**openat/fstatat64 ENOENT fix**: The zygote's seccomp occasionally blocks these syscalls
-via SIGSYS. The SIGSYS `default:` handler now returns `-ENOENT` for these two syscalls
-instead of `-ENOSYS`. This is critical because musl's ldso `path_open()` treats ENOENT
-as "continue searching" but ENOSYS as "abort all search". Without this fix, a single
-failed openat on a non-existent path (e.g. `/usr/lib/perl5/core_perl/CORE/libncursesw.so.6`)
-would prevent the dynamic linker from finding the real library at `/usr/lib/libncursesw.so.6`.
+**aarch64 x0 clobber bug**: On aarch64, `SYSARG_1` and `SYSARG_RESULT` both map to register
+x0. At SIGSYS time the kernel may clobber x0 before proot reads it. All handlers that read
+`SYSARG_1` use `ORIGINAL` register version (saved right after `fetch_regs()`) instead of
+`CURRENT`. `SYSARG_2`-`SYSARG_6` (x1-x5) are unaffected. Without this fix, `fchdir(fd)`
+appeared as `fchdir(0)` because x0 was clobbered to 0.
 
-**Allowed syscalls** (confirmed working):
-- `clone3` (435), `getrandom` (278), `memfd_create` (279), `pipe2` (59),
-  `statx` (291), `preadv2` (286), `copy_file_range` (285), `fstatfs` (44)
+**openat/fstatat64 ENOENT fix**: The SIGSYS `default:` handler returns `-ENOENT` instead of
+`-ENOSYS` for these two syscalls. This is critical because musl's ldso `path_open()` treats
+ENOENT as "continue searching" but ENOSYS as "abort all search". Without this fix, a single
+failed openat on a non-existent path would prevent the dynamic linker from finding the real
+library.
 
-**Impact**: Modern musl (Alpine's libc) uses `faccessat2`/`renameat2` by default. When these
-were blocked by the zygote, proot's SIGSYS handler returned ENOSYS (the `default:` case).
-This caused `apk update` to fail. **Fixed** in T5.2 by adding downgrade handlers in seccomp.c.
-See `docs/phase5-alpine.md` for details.
+**Verified working** (on fresh Alpine install, app process with seccomp: 2):
+- `apk update`, `apk add vim`, `apk add curl`, `apk add openssh` — all 0 errors
+- `vim --version`, `curl --version`, `ssh -V` — all pass
 
 ### Key Files
 
 - `android/app/build.gradle.kts` — `targetSdk = 28` (MUST NOT exceed 28 for proot to work)
 - `src/proot/src/tracee/event.c` — seccomp patch (line 95: skip proot's own seccomp filter)
-- `src/proot/src/tracee/seccomp.c` — proot's seccomp handler (ENOENT for openat/fstatat64, ENOSYS for others)
+- `src/proot/src/tracee/seccomp.c` — proot's seccomp handler (12 SIGSYS handlers, x0 clobber fix, ENOENT for openat/fstatat64)
 - `src/pr-cli/src/login.rs` — proot invocation with PROOT_TMP_DIR, arg0("proot"), nativeLibraryDir paths
 - `docs/phase5-alpine.md` — Alpine-specific investigation and seccomp findings
 
