@@ -1,9 +1,9 @@
 # Alpine Linux on Android via proot
 
-## Status: Login + package management + vim work
+## Status: Login + package management + openssh work
 
 Alpine 3.23.3 installs, logs in, and runs `apk update`/`apk add`/`apk del` successfully from
-the app process with targetSdk=28. `vim --version` and `curl --version` also work.
+the app process with targetSdk=28. `vim --version`, `curl --version`, and `ssh -V` all work.
 
 ## What works
 
@@ -18,8 +18,10 @@ the app process with targetSdk=28. `vim --version` and `curl --version` also wor
 - **Remove**: `pr-cli remove alpine` wipes rootfs, exit code 0
 - **Re-install**: Second install works after remove
 - **apk update / apk add / apk del**: All package operations work (fixed in T5.2)
+- **apk add openssh**: Installs with 0 errors on fresh Alpine (fixed)
 - **vim --version**: Works with full ncurses support (fixed)
 - **curl --version**: Works with full TLS/HTTP2 (tested)
+- **ssh -V**: OpenSSH works after `apk add openssh` (fixed)
 
 ## Remaining issues
 
@@ -214,3 +216,30 @@ SIGSYS: kernel_num=56 pr=223 args=[...] path="..."  # openat → -ENOENT (search
 
 **Files changed**:
 - `src/proot/src/tracee/seccomp.c` — SIGSYS downgrade handlers + ENOENT fix for default case
+
+## Fix Applied (T5.2): openssh / busybox trigger
+
+Root cause: two bugs prevented `apk add openssh` from completing successfully.
+
+**Bug 1 — aarch64 x0 clobber**: On aarch64, `SYSARG_1` and `SYSARG_RESULT` both map to
+register x0. At SIGSYS time, the kernel clobbers x0 before proot reads it. The fchdir
+handler read `dirfd=0` (stdin) instead of the real directory fd, causing `translate_path()`
+to return ENOTDIR (-20). Same issue affected `PR_chdir` (path pointer) and `PR_linkat`
+(olddirfd).
+
+**Fix**: Changed `PR_chdir`, `PR_fchdir`, `PR_linkat` to read `SYSARG_1` from `ORIGINAL`
+register version (saved by `save_current_regs(ORIGINAL_SECCOMP_REWRITE)` right after
+`fetch_regs()`) instead of `CURRENT`. `SYSARG_2`-`SYSARG_6` (x1-x5) are unaffected since
+they don't overlap with the result register.
+
+**Bug 2 — missing getcwd handler**: The zygote blocks `getcwd` (syscall 17). Without a
+handler, the default case returned -ENOSYS. The busybox trigger script calls `getcwd()`
+during `busybox --install -s`, which failed silently.
+
+**Fix**: Added `PR_getcwd` SIGSYS handler that reads proot's tracked cwd
+(`tracee->fs->cwd`), verifies the path exists via `translate_path()`, writes it to the
+tracee's output buffer, and returns the string length. Modeled after the existing
+`PR_getcwd` exit handler in `exit.c`.
+
+**Files changed**:
+- `src/proot/src/tracee/seccomp.c` — x0 clobber fix + PR_getcwd handler
