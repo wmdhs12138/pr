@@ -667,16 +667,19 @@ ptrace_scope, no `noexec` on /data, SELinux Enforcing.
     will be caught by live testing at T7.5.
   - Bionic version: ndk-r29-321-g731631f30 (AOSP main, 2025-03-26)
 
-- [ ] **T7.5** Test targetSdk 35 (Play Store minimum as of August 2025)
+- [x] **T7.5** Test targetSdk 35 (Play Store minimum as of August 2025)
   - Set `targetSdk = 35` in build.gradle.kts
-  - Build, deploy, attempt proot login
-  - On failure: `adb shell dmesg | grep avc` for SELinux denials
-  - On SIGSYS: check `sigsys-log.txt` for newly blocked syscalls
-  - Add handlers following the same pattern as existing 12+1
+  - Build, deploy, test proot login — terminal opened successfully
+  - `apk --version` runs without error
+  - No new SELinux denials or SIGSYS events
+  - Confirmed: no behavioral difference from targetSdk 29
 
-- [ ] **T7.5b** Test targetSdk 36 (matches device OS)
-  - Same verification steps as T7.5
-  - Future-proofing ceiling
+- [x] **T7.5b** Test targetSdk 36 (matches device OS)
+  - Set `targetSdk = 36` in build.gradle.kts
+  - Build, deploy, test proot login — terminal opened successfully
+  - `apk --version` and `vim --version` both run without error
+  - Confirmed: no behavioral difference from targetSdk 35
+  - Final targetSdk set to 35 (Play Store minimum)
 
 - [ ] **T7.6** Full regression at final targetSdk
   - Re-run all T5.2–T5.6 integration tests
