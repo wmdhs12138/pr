@@ -646,11 +646,26 @@ ptrace_scope, no `noexec` on /data, SELinux Enforcing.
 - [x] **Verified**: proot login works at targetSdk 29 — user confirmed terminal shows
   up and `apk --version` runs successfully from the app UI
 
-- [ ] **T7.4** Pre-check AOSP seccomp BPF allowlist for SDK 35/36 vs current handlers
-  - Download `arm64-api-35.txt` from AOSP bionic repo
-  - Cross-reference against the 12+1 handled syscalls
-  - Identify any syscalls that are newly blocked at SDK 35
-  - Do this before running T7.5 — find issues statically first
+- [x] **T7.4** Pre-check AOSP seccomp BPF allowlist for SDK 35/36 vs current handlers
+  - Analyzed bionic submodule (`vendor/bionic/`) seccomp policy files:
+    `SECCOMP_BLOCKLIST_APP.TXT`, `SECCOMP_ALLOWLIST_APP.TXT`,
+    `SECCOMP_BLOCKLIST_COMMON.TXT`, `SECCOMP_ALLOWLIST_COMMON.TXT`
+  - Formula: `allowed = SYSCALLS.TXT - BLOCKLIST + ALLOWLIST` (per architecture)
+  - Key finding: proot's `enable_syscall_filtering()` is never called — proot does
+    NOT install its own seccomp filter. The zygote's BPF filter is the only one active.
+  - Key finding: the bionic seccomp policy is compiled into the system image and does
+    NOT change per targetSdk. Observed SDK 28 vs 29 differences were from different
+    proot code paths, not different seccomp filters.
+  - Blocked syscalls for arm64 (lp64): setuid, setgid, setreuid, setregid, setresgid,
+    setfsgid, setfsuid, setgroups, mount, umount2, chroot, adjtimex, clock_settime,
+    clock_adjtime, settimeofday, acct, syslog, init_module, delete_module, reboot,
+    swapon, swapoff, sethostname, setdomainname
+  - All blocked syscalls are handled by proot's default SIGSYS handler (returns -ENOSYS)
+    — they fail gracefully. Only specific syscalls need special handlers (fchmodat,
+    chdir, fchdir, getcwd, linkat) which we already have.
+  - Conclusion: no code changes needed. Samsung-specific or framework-level differences
+    will be caught by live testing at T7.5.
+  - Bionic version: ndk-r29-321-g731631f30 (AOSP main, 2025-03-26)
 
 - [ ] **T7.5** Test targetSdk 35 (Play Store minimum as of August 2025)
   - Set `targetSdk = 35` in build.gradle.kts
