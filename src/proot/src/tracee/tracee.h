@@ -30,6 +30,7 @@
 #include <sys/ptrace.h>/* enum __ptrace_request */
 #include <talloc.h>    /* talloc_*, */
 #include <stdint.h>    /* *int*_t, */
+#include <limits.h>    /* PATH_MAX, */
 
 #include "arch.h" /* word_t, user_regs_struct, HAS_POKEDATA_WORKAROUND */
 #include "compat.h"
@@ -262,6 +263,7 @@ typedef struct tracee {
 	char *exe;
 	char *new_exe;
 	char *host_exe;
+	char host_exe_before_l2s[PATH_MAX];
 
 
 	/**********************************************************************

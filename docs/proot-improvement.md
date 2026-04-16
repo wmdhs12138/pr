@@ -188,6 +188,7 @@ The `default:` case in the SIGSYS handler differentiates between syscalls:
 | `PR_statfs`/`PR_statfs64` tmpfs faking | Writes `TMPFS_MAGIC` (0x01021994) for `/dev/shm` path |
 | `PR_statx` handling | Delegates to `handle_statx_syscall()` from `tracee/statx.c` |
 | `PR_ioctl` FICLONE fix | Changes EACCES to EOPNOTSUPP for FICLONE ioctl (from termux) |
+| `PR_readlink`/`PR_readlinkat` `.l2s.` hiding | After `detranslate_path()`, returns EINVAL if result contains `/.l2s/` — makes link2symlink's fake symlinks invisible to `readlink()`, preserving original hard-link semantics |
 
 ### From termux
 - Negative result debug logging (first 50 calls)
@@ -321,6 +322,7 @@ New fields:
 | `pokedata_workaround_stub_addr/cancelled/relaunched` | For POKEDATA workaround |
 | `is_aarch32` | Tracks 32-bit ARM execution on aarch64 |
 | `host_exe` | Host-side executable path |
+| `host_exe_before_l2s` | Host path saved before link2symlink's `translated_path()` modifies it — used for correct `/proc/self/exe` computation |
 | `skip_proot_loader` | Bypass proot loader for host binaries |
 
 ---
@@ -342,6 +344,7 @@ define this constant.
 | `PR_execveat` | Converts to `PR_execve` when AT_FDCWD, else ENOSYS |
 | `PR_statx` | Separate handler with AT_SYMLINK_NOFOLLOW flag handling |
 | `PR_memfd_create` | Blocks specific names: `"JITCode:*"` (Qt JIT), `"opcache_lock"` (PHP 8.3), `"lib/apk/exec/*"` (apk-tools v3) |
+| `PR_clone`/`PR_clone3` | Strips `CLONE_VM` and `CLONE_VFORK` from clone flags when `CLONE_THREAD` is not set — converts Rust's `vfork`-style process spawns into regular `fork()` |
 
 ### Android ioctl translation
 
@@ -379,6 +382,7 @@ Under `#ifdef __ANDROID__`, remaps terminal ioctls:
   `ld -b binary`
 - **Loader permissions**: Tightened from `u+r,g+r,o+r,u+x,g+x,o+x` to `u+r,u+x`
 - **`host_exe` tracking**: New field set to host path before detranslation
+- **`host_exe_before_l2s` for exe**: Uses the host path saved before link2symlink resolution for `/proc/self/exe` computation, preventing `.l2s.` path leaks
 - **Android library paths**: Adds `/system/lib` and `/system/lib64` to LD_LIBRARY_PATH
 - **Recursive interpreter fix**: Gracefully handles ELF with nested interpreter
 
@@ -460,6 +464,7 @@ running without root (Android).
 - `handle_linkat_from_proc_fd()` for Android's "deleted" file pattern
 - F2FS bug integration
 - 32-on-64 stat size fix
+- `translated_path()` skip list includes `PR_readlink`/`PR_readlinkat` — prevents link2symlink from resolving its fake symlink chain for readlink syscalls, which would cause the kernel to `readlink()` a regular file instead of the actual symlink
 
 ---
 
@@ -492,7 +497,7 @@ running without root (Android).
 |------|--------|
 | `path/proc.c` | Disabled assertion that fails on some devices (termux #1679) |
 | `path/temp.c` | Simplified readdir cleanup; `PROOT_TMP_DIR` fallback change |
-| `path/path.c` | Removed `ALREADY_OPENED_FD` notification |
+| `path/path.c` | Removed `ALREADY_OPENED_FD` notification; saves host path to `tracee->host_exe_before_l2s` before `TRANSLATED_PATH` event |
 | `loader/loader.c` | Removed GCC version check for `__builtin_unreachable()` |
 | `loader/assembly-arm.h` | `bx` instead of `mov pc`; Thumb mode SYSCALL macro |
 | `tracee/abi.h` | ARM64 ABI detection for 32-on-64 mode |

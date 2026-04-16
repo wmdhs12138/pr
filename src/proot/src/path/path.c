@@ -385,6 +385,11 @@ skip:
 	VERBOSE(tracee, 2, "vpid %" PRIu64 ":          -> \"%s\"",
 		tracee != NULL ? tracee->vpid : 0, result);
 
+	if (tracee != NULL) {
+		strncpy(tracee->host_exe_before_l2s, result, PATH_MAX - 1);
+		tracee->host_exe_before_l2s[PATH_MAX - 1] = '\0';
+	}
+
 	status = notify_extensions(tracee, TRANSLATED_PATH, (intptr_t) result, 0);
 	if (status < 0)
 		return status;

@@ -1,6 +1,7 @@
 # Important Notes
 
 See also:
+- `docs/phase8.md` — Phase 8: Rust toolchain support (vfork/CLONE_VM fix, link2symlink readlink fix)
 - `docs/phase7-targetSdk35.md` — Phase 7: targetSdk 35 compatibility (SELinux W^X bypass, seccomp analysis)
 - `docs/phase6-proot-distro-rust-port.md` — Phase 6: Replace proot-distro.sh with Rust binary (exploration, viability tests, recommendation)
 - `docs/phase5-alpine.md` — Phase 5: Alpine Linux investigation and fixes

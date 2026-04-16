@@ -635,11 +635,14 @@ int translate_execve_enter(Tracee *tracee)
 
 	/* Remember the new value for "/proc/self/exe".  It points to
 	 * a canonicalized guest path, hence detranslate_path()
-	 * instead of using user_path directly.  */
+	 * instead of using user_path directly.  Use the host path
+	 * from before link2symlink resolution to avoid leaking the
+	 * internal ".l2s." path into /proc/self/exe.  */
 	talloc_unlink(tracee, tracee->host_exe);
 	tracee->host_exe = talloc_strdup(tracee, host_path);
 
-	strcpy(new_exe, host_path);
+	strcpy(new_exe, tracee->host_exe_before_l2s[0] != '\0'
+		? tracee->host_exe_before_l2s : host_path);
 	status = detranslate_path(tracee, new_exe, NULL);
 	if (status >= 0) {
 		talloc_unlink(tracee, tracee->new_exe);

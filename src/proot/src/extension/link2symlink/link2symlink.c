@@ -496,7 +496,6 @@ static void translated_path(Tracee *tracee, char translated_path[PATH_MAX])
 	char *component;
 	int status;
 
-	/* Don't translate l2s symlinks if call is (un)link */
 	Sysnum sysnum = get_sysnum(tracee, ORIGINAL);
 	if (   sysnum == PR_unlink
 	    || sysnum == PR_unlinkat
@@ -504,7 +503,9 @@ static void translated_path(Tracee *tracee, char translated_path[PATH_MAX])
 	    || sysnum == PR_linkat
 	    || sysnum == PR_rename
 	    || sysnum == PR_renameat
-	    || sysnum == PR_renameat2) {
+	    || sysnum == PR_renameat2
+	    || sysnum == PR_readlink
+	    || sysnum == PR_readlinkat) {
 		return;
 	}
 

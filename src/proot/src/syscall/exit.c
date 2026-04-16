@@ -396,6 +396,11 @@ void translate_syscall_exit(Tracee *tracee)
 		if (status < 0)
 			break;
 
+		if (status > 0 && strstr(referee, "/.l2s/") != NULL) {
+			status = -EINVAL;
+			break;
+		}
+
 		/* The original path doesn't require any transformation, i.e
 		 * it is a symetric binding.  */
 		if (status == 0)

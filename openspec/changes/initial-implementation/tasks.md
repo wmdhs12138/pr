@@ -729,7 +729,10 @@ After `vfork+execve`, the resulting process (e.g., `cc`) appears to run fine, bu
 own internal `posix_spawnp("cc1")` calls fail with ENOSYS. This means the proot ptrace
 state is corrupted or incomplete for processes created via `clone(CLONE_VM)`.
 
-Test files: `docs/pspawn.c` (posix_spawn test), `docs/vfork_test.c` (vfork test)
+Test programs used during investigation:
+- `vfork()` + `execve("/usr/bin/cc")` — confirmed vfork hung before T8.1 fix
+- `readlink("/proc/self/exe")` — confirmed .l2s. leak before T8.2 Part A fix
+Both tests documented with code in `docs/phase8.md`.
 
 ### What works inside proot
 
@@ -754,17 +757,17 @@ Test files: `docs/pspawn.c` (posix_spawn test), `docs/vfork_test.c` (vfork test)
   - Verified: regression tests pass (apk, vim, gcc all work)
   - Side effect: gcc's prefix resolution is broken by link2symlink (tracked as T8.2)
 
-- [ ] **T8.2** Fix GCC prefix resolution broken by link2symlink
-  - `cc -print-search-dirs` shows `/.l2s/../lib/gcc/...` instead of `/usr/lib/gcc/...`
-  - Root cause: proot's link2symlink extension makes `/proc/self/exe` resolve to the
-    `.l2s.` symlink path, causing gcc's `make_relative_prefix()` to compute wrong prefix
-  - Workaround: set `COMPILER_PATH` and `LIBRARY_PATH` environment variables:
-    - `COMPILER_PATH=/usr/libexec/gcc/aarch64-alpine-linux-musl/15.2.0/`
-    - `LIBRARY_PATH=/usr/lib/gcc/aarch64-alpine-linux-musl/15.2.0:/usr/lib/gcc/aarch64-alpine-linux-musl/15.2.0/../../../../aarch64-alpine-linux-musl/lib:/lib:/usr/lib`
-  - Possible fixes: (A) fix `/proc/self/exe` virtualization in proot to return the
-    guest path instead of the `.l2s.` host path, (B) document env vars as required
-    for Rust/C++ toolchain usage, (C) have pr-cli set these env vars automatically
-  - Impact: gcc/rustc compilation works with env vars, fails without them
+- [x] **T8.2** Fix GCC prefix resolution broken by link2symlink
+  - `cc -print-search-dirs` showed `/.l2s/../lib/gcc/...` instead of `/usr/lib/gcc/...`
+  - Root cause: link2symlink's `translated_path()` leaked `.l2s.` paths through `readlink()`
+  - Fix (two parts):
+    - Part A: Save host path before link2symlink resolution in `tracee->host_exe_before_l2s`,
+      use it for `/proc/self/exe` computation (3 files: tracee.h, path.c, execve/enter.c)
+    - Part B: Skip `translated_path()` for readlink/readlinkat, return EINVAL when readlink
+      result contains `/.l2s/` (2 files: link2symlink.c, exit.c)
+  - Verified: `cc -print-search-dirs` returns correct paths, `cargo build` works without
+    COMPILER_PATH/LIBRARY_PATH workarounds
+  - See `docs/phase8.md` for full analysis
 
 - [ ] **T8.3** Test full Rust toolchain after T8.1 fix
   - `cargo build` on a simple hello-world project
