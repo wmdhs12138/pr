@@ -782,9 +782,11 @@ Both tests documented with code in `docs/phase8.md`.
 - [ ] **T8.4** Fix git lock file issue under proot
   - `cargo new /tmp/hello` fails: "failed to create locked file .git/config.lock: File exists"
   - Workaround: `cargo new --vcs none /tmp/hello` works
-  - Confirmed via Phase 9 rust suite test 4: `cargo new` with default git VCS hits lock file error
-  - Root cause: proot filesystem virtualization conflicts with git's lock file creation (O_CREAT|O_EXCL)
-  - Likely related to: flock, openat with O_EXCL, or link2symlink interference
+  - Confirmed via Phase 9: not a stale file (remove_dir_all succeeds before cargo new)
+  - `git init` fails with: `fatal: unable to access '/root/.config/git/config': Function not implemented`
+  - Root cause investigation needed: ENOSYS on git config access may cause partial git init state,
+    leaving lock file that triggers EEXIST on retry
+  - git binary CAN be exec'd through /bin/sh -c inside proot (probe fixed to check file existence)
   - Separate from the ENOSYS issue affecting rustc compile and cargo build
 
 ## Phase 9 — Proot Integration Test Suite
@@ -875,10 +877,13 @@ src/proot-integration-test/
   - Blocked by T8.4 (git lock file) and musl clone3 ENOSYS inside proot
 
 - [ ] **T9.8** Suite: git (Git under proot)
-  - `git init` in `/tmp`
-  - `git config user.name/email`
-  - `cargo new /tmp/test-repo` (tests git init via cargo, covers T8.4 regression)
-  - Verified on device: 3/3 skipped (git binary cannot be exec'd inside proot)
+  - 3 tests: git init, git config, cargo new with vcs git
+  - Probe fixed: checks `/usr/bin/git` existence instead of exec (git binary CAN be exec'd through /bin/sh -c)
+  - Verified on device: 0/3 passed, 0/3 skipped
+    - git init: ENOSYS accessing /root/.config/git/config
+    - git config: ENOSYS accessing /root/.config/git/config
+    - cargo new with vcs git: config.lock file exists (T8.4)
+  - Blocked by T8.4
 
 - [ ] **T9.9** Suite: general (proot stability)
   - File I/O roundtrip: create, write, read, chmod, rename, delete in `/tmp`

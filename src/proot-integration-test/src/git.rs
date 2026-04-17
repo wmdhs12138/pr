@@ -8,11 +8,7 @@ fn run_sh(cmd: &str) -> Result<std::process::Output, String> {
 }
 
 pub fn probe() -> bool {
-    std::process::Command::new("/bin/sh")
-        .args(["-c", "git --version >/dev/null 2>&1"])
-        .status()
-        .map(|o| o.success())
-        .unwrap_or(false)
+    std::path::Path::new("/usr/bin/git").exists()
 }
 
 pub fn test_git_init() -> TestResult {

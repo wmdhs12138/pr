@@ -76,6 +76,11 @@ pub fn test_cargo_no_vcs() -> TestResult {
 
 pub fn test_cargo_with_vcs() -> TestResult {
     let _ = std::fs::remove_dir_all("/tmp/pit-cargo-vcs");
+
+    if std::path::Path::new("/tmp/pit-cargo-vcs/.git/config.lock").exists() {
+        return Err("stale .git/config.lock exists after remove_dir_all".to_string());
+    }
+
     let out = run_sh("cargo new /tmp/pit-cargo-vcs 2>&1")?;
     if !out.status.success() {
         let _ = std::fs::remove_dir_all("/tmp/pit-cargo-vcs");
