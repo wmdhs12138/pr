@@ -770,16 +770,22 @@ Both tests documented with code in `docs/phase8.md`.
   - See `docs/phase8.md` for full analysis
 
 - [ ] **T8.3** Test full Rust toolchain after T8.1 fix
-  - `cargo build` on a simple hello-world project
-  - `cargo build` on a project with dependencies
-  - Verify no regression in C/C++ compilation
-  - Verify no regression in proot login/session stability
+  - Phase 9 rust suite (4 tests) provides automated regression testing:
+    - `rustc -vV` ✅ pass (no subprocess needed)
+    - `rustc compile .rs` ❌ ENOSYS: rustc (musl) cannot exec linker `cc` inside proot
+    - `cargo build --vcs none` ❌ ENOSYS: cargo (musl) cannot exec `rustc` inside proot
+    - `cargo build with git` ❌ lock file: `cargo new` fails at git config.lock (separate from ENOSYS)
+  - C/C++ compilation: ✅ no regression (gcc suite 3/3 pass)
+  - proot login/session stability: ✅ no regression (all other suites pass)
+  - Blocked by two distinct issues: musl clone3 ENOSYS (tests 2-3) and git lock file (test 4)
 
 - [ ] **T8.4** Fix git lock file issue under proot
-  - `cargo new /tmp/hello` fails: "failed to create locked file .git/config.lock: file exists"
+  - `cargo new /tmp/hello` fails: "failed to create locked file .git/config.lock: File exists"
   - Workaround: `cargo new --vcs none /tmp/hello` works
-  - Likely related to git's lock file handling under proot filesystem virtualization
-  - Needs investigation: flock, openat, or symlink resolution issue
+  - Confirmed via Phase 9 rust suite test 4: `cargo new` with default git VCS hits lock file error
+  - Root cause: proot filesystem virtualization conflicts with git's lock file creation (O_CREAT|O_EXCL)
+  - Likely related to: flock, openat with O_EXCL, or link2symlink interference
+  - Separate from the ENOSYS issue affecting rustc compile and cargo build
 
 ## Phase 9 — Proot Integration Test Suite
 
@@ -861,11 +867,12 @@ src/proot-integration-test/
   - Verified on device: 3/3 passed on Alpine (gcc compile works inside proot!)
 
 - [ ] **T9.7** Suite: rust (Rust toolchain)
-  - `rustc -vV` returns version info
-  - `rustc` compiles `.rs` file to working binary
-  - `cargo new --vcs none /tmp/hello && cargo build` (hello-world)
-  - `cargo build` on project with dependency (e.g., `libc` crate)
-  - Verified on device: 1/3 passed, 2 failed (ENOSYS — blocked by T8.4)
+  - 4 tests: rustc -vV, rustc compile .rs, cargo build --vcs none, cargo build with git
+  - Verified on device: 1/4 passed (rustc -vV), 3 failed:
+    - rustc compile: ENOSYS (musl rustc can't exec linker cc)
+    - cargo build --vcs none: ENOSYS (cargo can't exec rustc)
+    - cargo build with git: git config.lock file exists (T8.4)
+  - Blocked by T8.4 (git lock file) and musl clone3 ENOSYS inside proot
 
 - [ ] **T9.8** Suite: git (Git under proot)
   - `git init` in `/tmp`

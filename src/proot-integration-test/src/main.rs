@@ -187,8 +187,12 @@ const SUITES: &[Suite] = &[
                 run: rust::test_rustc_compile,
             },
             Test {
-                name: "cargo build hello-world",
-                run: rust::test_cargo_hello,
+                name: "cargo build --vcs none",
+                run: rust::test_cargo_no_vcs,
+            },
+            Test {
+                name: "cargo build with git",
+                run: rust::test_cargo_with_vcs,
             },
         ],
     },
