@@ -73,3 +73,55 @@ pub fn test_lstat_stat() -> TestResult {
         Err(format!("expected 2 stat lines, got {:?}", lines))
     }
 }
+
+pub fn test_readlink_small_buffer() -> TestResult {
+    let tmp = "/tmp/pit-readlink-smallbuf";
+    let _ = fs::remove_file(tmp);
+    let target = "/usr/lib/gcc/aarch64-alpine-linux-musl/14.2.0";
+    std::os::unix::fs::symlink(target, tmp).map_err(|e| format!("symlink: {}", e))?;
+
+    let c_src = r#"#include <unistd.h>
+#include <stdio.h>
+int main(){char b[8];ssize_t n=readlink("/tmp/pit-readlink-smallbuf",b,4);
+if(n<0)return 1;b[n]='\0';printf("%s\n",b);return 0;}"#;
+    let c_path = "/tmp/pit-rlbuf.c";
+    let bin_path = "/tmp/pit-rlbuf";
+    fs::write(c_path, c_src).map_err(|e| format!("write c src: {}", e))?;
+
+    let compile = std::process::Command::new("/bin/sh")
+        .args(["-c", &format!("cc {} -o {} 2>&1", c_path, bin_path)])
+        .output()
+        .map_err(|e| format!("compile: {}", e))?;
+    if !compile.status.success() {
+        let _ = fs::remove_file(tmp);
+        let _ = fs::remove_file(c_path);
+        return Err(format!(
+            "cc failed: {}",
+            std::str::from_utf8(&compile.stderr).unwrap_or("?")
+        ));
+    }
+
+    let run = std::process::Command::new("/bin/sh")
+        .args(["-c", &format!("{} 2>&1", bin_path)])
+        .output()
+        .map_err(|e| format!("run: {}", e))?;
+
+    let _ = fs::remove_file(tmp);
+    let _ = fs::remove_file(c_path);
+    let _ = fs::remove_file(bin_path);
+
+    if !run.status.success() {
+        return Err(format!(
+            "readlink test binary failed: {}",
+            std::str::from_utf8(&run.stderr).unwrap_or("?")
+        ));
+    }
+
+    let got = std::str::from_utf8(&run.stdout).unwrap_or("").trim();
+    let expected = &target[..4];
+    if got == expected && !got.contains(".l2s") {
+        Ok(())
+    } else {
+        Err(format!("expected {:?}, got {:?}", expected, got))
+    }
+}

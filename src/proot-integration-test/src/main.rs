@@ -150,6 +150,10 @@ const SUITES: &[Suite] = &[
                 name: "lstat vs stat consistency",
                 run: readlink::test_lstat_stat,
             },
+            Test {
+                name: "readlink small buffer",
+                run: readlink::test_readlink_small_buffer,
+            },
         ],
     },
     Suite {

@@ -851,13 +851,10 @@ src/proot-integration-test/
   - 5 tests: fork+exec baseline, stdout piped, nested spawn, CLONE_THREAD preserved, concurrent spawn stress
   - Verified on device: 5/5 passed on Alpine
 
-- [ ] **T9.5** Suite: readlink (.l2s. hiding regression)
-  - `realpath` on known symlink returns path without `.l2s.`
-  - `readlink` on `.l2s.` symlink returns EINVAL
-  - `/proc/self/exe` does not contain `.l2s.`
-  - `lstat` vs `stat` consistency on symlink targets
-  - `busybox readlink` edge case (small buffer)
-  - Verified on device: 5/5 passed on Alpine
+- [x] **T9.5** Suite: readlink (.l2s. hiding regression)
+  - 6 tests: regular symlink, realpath no .l2s., readlink EINVAL on .l2s., /proc/self/exe no .l2s.,
+    lstat vs stat, readlink small buffer (gcc-compiled C program with 4-byte buffer)
+  - Verified on device: 6/6 passed on Alpine
 
 - [ ] **T9.6** Suite: gcc (GCC prefix resolution)
   - `cc -print-search-dirs` returns `install: /usr/lib/gcc/...`
