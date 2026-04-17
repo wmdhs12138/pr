@@ -2,6 +2,7 @@ use std::env;
 use std::process;
 
 mod clone;
+mod distro;
 mod gcc;
 mod general;
 mod git;
@@ -62,62 +63,169 @@ impl TapReporter {
 
 const SUITES: &[Suite] = &[
     Suite {
+        name: "distro",
+        probe: distro::probe,
+        tests: &[
+            Test {
+                name: "detect package manager",
+                run: distro::test_detect_pm,
+            },
+            Test {
+                name: "update repos",
+                run: distro::test_update_repos,
+            },
+            Test {
+                name: "install tools",
+                run: distro::test_install_tools,
+            },
+            Test {
+                name: "verify vim",
+                run: distro::test_verify_vim,
+            },
+            Test {
+                name: "verify gcc",
+                run: distro::test_verify_gcc,
+            },
+            Test {
+                name: "verify rustc",
+                run: distro::test_verify_rustc,
+            },
+            Test {
+                name: "verify cargo",
+                run: distro::test_verify_cargo,
+            },
+            Test {
+                name: "read /etc/os-release",
+                run: distro::test_os_release,
+            },
+        ],
+    },
+    Suite {
         name: "clone",
         probe: clone::probe,
         tests: &[
-            Test { name: "fork+exec baseline", run: clone::test_fork_exec },
-            Test { name: "Command stdout piped", run: clone::test_stdout_piped },
-            Test { name: "nested spawn", run: clone::test_nested_spawn },
-            Test { name: "CLONE_THREAD preserved", run: clone::test_thread },
+            Test {
+                name: "fork+exec baseline",
+                run: clone::test_fork_exec,
+            },
+            Test {
+                name: "Command stdout piped",
+                run: clone::test_stdout_piped,
+            },
+            Test {
+                name: "nested spawn",
+                run: clone::test_nested_spawn,
+            },
+            Test {
+                name: "CLONE_THREAD preserved",
+                run: clone::test_thread,
+            },
         ],
     },
     Suite {
         name: "readlink",
         probe: readlink::probe,
         tests: &[
-            Test { name: "regular symlink resolves", run: readlink::test_symlink_resolve },
-            Test { name: "realpath no .l2s.", run: readlink::test_realpath_no_l2s },
-            Test { name: "readlink EINVAL on .l2s.", run: readlink::test_readlink_einval },
-            Test { name: "/proc/self/exe no .l2s.", run: readlink::test_proc_self_exe },
-            Test { name: "lstat vs stat consistency", run: readlink::test_lstat_stat },
+            Test {
+                name: "regular symlink resolves",
+                run: readlink::test_symlink_resolve,
+            },
+            Test {
+                name: "realpath no .l2s.",
+                run: readlink::test_realpath_no_l2s,
+            },
+            Test {
+                name: "readlink EINVAL on .l2s.",
+                run: readlink::test_readlink_einval,
+            },
+            Test {
+                name: "/proc/self/exe no .l2s.",
+                run: readlink::test_proc_self_exe,
+            },
+            Test {
+                name: "lstat vs stat consistency",
+                run: readlink::test_lstat_stat,
+            },
         ],
     },
     Suite {
         name: "gcc",
         probe: gcc::probe,
         tests: &[
-            Test { name: "cc -print-search-dirs", run: gcc::test_search_dirs },
-            Test { name: "compile and run C program", run: gcc::test_compile_c },
-            Test { name: "/proc/self/exe after exec", run: gcc::test_proc_exe },
+            Test {
+                name: "cc -print-search-dirs",
+                run: gcc::test_search_dirs,
+            },
+            Test {
+                name: "compile and run C program",
+                run: gcc::test_compile_c,
+            },
+            Test {
+                name: "/proc/self/exe after exec",
+                run: gcc::test_proc_exe,
+            },
         ],
     },
     Suite {
         name: "rust",
         probe: rust::probe,
         tests: &[
-            Test { name: "rustc -vV", run: rust::test_rustc_version },
-            Test { name: "rustc compile .rs", run: rust::test_rustc_compile },
-            Test { name: "cargo build hello-world", run: rust::test_cargo_hello },
+            Test {
+                name: "rustc -vV",
+                run: rust::test_rustc_version,
+            },
+            Test {
+                name: "rustc compile .rs",
+                run: rust::test_rustc_compile,
+            },
+            Test {
+                name: "cargo build hello-world",
+                run: rust::test_cargo_hello,
+            },
         ],
     },
     Suite {
         name: "git",
         probe: git::probe,
         tests: &[
-            Test { name: "git init", run: git::test_git_init },
-            Test { name: "git config", run: git::test_git_config },
-            Test { name: "cargo new with vcs git", run: git::test_cargo_new_git },
+            Test {
+                name: "git init",
+                run: git::test_git_init,
+            },
+            Test {
+                name: "git config",
+                run: git::test_git_config,
+            },
+            Test {
+                name: "cargo new with vcs git",
+                run: git::test_cargo_new_git,
+            },
         ],
     },
     Suite {
         name: "general",
         probe: general::probe,
         tests: &[
-            Test { name: "file I/O roundtrip", run: general::test_file_io },
-            Test { name: "symlink operations", run: general::test_symlink_ops },
-            Test { name: "pipe between processes", run: general::test_pipe },
-            Test { name: "signal propagation", run: general::test_signal },
-            Test { name: "environment inheritance", run: general::test_env },
+            Test {
+                name: "file I/O roundtrip",
+                run: general::test_file_io,
+            },
+            Test {
+                name: "symlink operations",
+                run: general::test_symlink_ops,
+            },
+            Test {
+                name: "pipe between processes",
+                run: general::test_pipe,
+            },
+            Test {
+                name: "signal propagation",
+                run: general::test_signal,
+            },
+            Test {
+                name: "environment inheritance",
+                run: general::test_env,
+            },
         ],
     },
 ];
@@ -150,7 +258,10 @@ fn main() {
             Some(s) => vec![s],
             None => {
                 eprintln!("Unknown suite: {}", suite_name);
-                eprintln!("Available: all, {}", SUITES.iter().map(|s| s.name).collect::<Vec<_>>().join(", "));
+                eprintln!(
+                    "Available: all, {}",
+                    SUITES.iter().map(|s| s.name).collect::<Vec<_>>().join(", ")
+                );
                 process::exit(1);
             }
         }
@@ -165,7 +276,10 @@ fn main() {
     }
 
     eprintln!("");
-    eprintln!("{} passed, {} failed, {} skipped", reporter.passed, reporter.failed, reporter.skipped);
+    eprintln!(
+        "{} passed, {} failed, {} skipped",
+        reporter.passed, reporter.failed, reporter.skipped
+    );
 
     if !reporter.failures.is_empty() {
         eprintln!("Failed: {}", reporter.failures.join(", "));

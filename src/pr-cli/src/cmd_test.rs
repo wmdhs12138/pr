@@ -204,8 +204,8 @@ fn install_tools(rootfs: &str, pkg_mgr: &str) -> Result<(), String> {
     msg_status("Installing tools...");
 
     let cmd = match pkg_mgr {
-        "apk" => "apk update 2>&1 && apk add --no-progress vim gcc rust cargo 2>&1",
-        "apt" => "apt-get update -qq 2>&1 && apt-get install -y -qq vim gcc rust cargo 2>&1",
+        "apk" => "apk update 2>&1 && apk add --no-progress vim gcc rust cargo git 2>&1",
+        "apt" => "apt-get update -qq 2>&1 && apt-get install -y -qq vim gcc rust cargo git 2>&1",
         _ => return Err(format!("unknown package manager: {}", pkg_mgr)),
     };
 
@@ -239,7 +239,9 @@ pub fn command_test(distro: &str, suite: Option<&str>, verbose: bool) -> Result<
         println!();
     }
 
-    let suites = ["clone", "readlink", "gcc", "rust", "git", "general"];
+    let suites = [
+        "distro", "clone", "readlink", "gcc", "rust", "git", "general",
+    ];
     let target_suites: Vec<&str> = match suite {
         Some(s) => {
             if suites.contains(&s) {
@@ -257,11 +259,11 @@ pub fn command_test(distro: &str, suite: Option<&str>, verbose: bool) -> Result<
 
     let needs_tools = target_suites
         .iter()
-        .any(|s| ["gcc", "rust", "git"].contains(s));
+        .any(|s| ["distro", "gcc", "rust", "git"].contains(s));
     if needs_tools {
-        let has_rustc = Path::new(&format!("{}/usr/bin/rustc", rootfs)).exists()
+        let has_tools = Path::new(&format!("{}/usr/bin/rustc", rootfs)).exists()
             || Path::new(&format!("{}/usr/local/bin/rustc", rootfs)).exists();
-        if !has_rustc {
+        if !has_tools {
             let pkg_mgr = detect_package_manager(&rootfs)?;
             install_tools(&rootfs, pkg_mgr)?;
             println!();

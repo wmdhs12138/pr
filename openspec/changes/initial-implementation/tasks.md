@@ -800,22 +800,15 @@ exercising syscall interception, filesystem virtualization, and toolchain suppor
 
 ```
 src/proot-integration-test/
-  Cargo.toml              aarch64-unknown-linux-musl, libc dep only
-  .cargo/config.toml      musl cross-linker
-  src/main.rs             proot-integration-test [suite|all] [--tap]
+  Cargo.toml              libc dep only (optional, behind full-deps feature)
+  src/main.rs             proot-integration-test [suite|all]
+  src/distro.rs           Package manager detection + tool installation
   src/clone.rs            CLONE_VM stripping tests
   src/readlink.rs         .l2s. hiding, readlink, realpath tests
   src/gcc.rs              GCC prefix resolution, C compilation tests
   src/rust.rs             rustc, cargo build tests
   src/git.rs              git init, lock files, cargo new tests
   src/general.rs          file I/O, symlinks, pipes, signals tests
-
-src/pr-cli/
-  src/cmd_test.rs         NEW: pr-cli test <distro> [suite]
-  src/test_runner.rs      NEW: deploy binary, invoke proot, parse TAP
-
-android/app/src/main/assets/
-  proot-integration-test  Guest binary packaged in APK
 ```
 
 ### Tasks
@@ -830,55 +823,72 @@ android/app/src/main/assets/
   - No cross-compilation setup — builds on-device inside proot via `cargo build`
   - Verified: `cargo check` passes with zero warnings
 
-- [ ] **T9.2** Add `pr-cli test <distro>` subcommand
-  - `src/cmd_test.rs`: CLI parsing — `pr-cli test <distro> [suite] [--verbose]`
-  - `src/test_runner.rs`:
-    - Resolve distro rootfs path from `installed-rootfs/<distro>/`
-    - Deploy: copy guest binary from APK assets to `<rootfs>/tmp/proot-integration-test`
-      (skip if already deployed and same version/hash)
-    - Invoke: same mechanism as `pr-cli login <distro> -- /tmp/proot-integration-test <suite>`
-    - Parse TAP: line-by-line, collect pass/fail/skip counts
-    - Report: table of suite results, summary line, list of failures
-  - Add `proot-integration-test` binary to APK assets (`android/app/src/main/assets/`)
-  - Add build step to `src/pr-cli/build-pr-cli.sh` or create separate build script
-  - Verify: `pr-cli test alpine` runs all suites and reports results
+- [x] **T9.2** Add `pr-cli test <distro>` subcommand + UI test button
+  - `src/cmd_test.rs`: full orchestration — `pr-cli test <distro> [-s suite] [-v]`
+  - Four-stage pipeline:
+    1. Install tools via proot+sh (apk add / apt install) — only if rustc not present
+    2. Deploy source files to `<rootfs>/tmp/pit-src/` (embedded via `include_str!`)
+    3. Build test binary with `rustc --edition 2021` inside proot
+    4. Run test binary, capture TAP output, parse and report results
+  - TAP parser: collects pass/fail/skip counts, lists failures
+  - Auto-detects package manager (apk: sbin/apk, usr/sbin/apk, usr/bin/apk; apt: usr/bin/apt, usr/bin/apt-get)
+  - Android UI: added BugReport icon button on each installed distro row (between Play and Delete)
+    in `MainActivity.kt`. Runs `pr-cli test <distro>` via `runDistroCommand`, output shown in
+    the existing output panel (same as install/remove).
+  - Verified: `cargo check --target aarch64-linux-android` passes, APK builds, button appears
 
-- [ ] **T9.3** Suite: clone (CLONE_VM stripping regression)
+- [x] **T9.3** Suite: distro setup (package manager + tool installation)
+  - Detect package manager: `apk` (Alpine) or `apt` (Debian)
+  - Install tools: `apk add vim gcc cargo rust git` or `apt install vim gcc cargo rust git`
+  - Verify installation: `vim --version`, `cc --version`, `rustc --version`, `cargo --version`
+  - This suite runs first to ensure tooling is available for subsequent suites
+  - Tests (8): detect PM, update repos, install tools, verify vim/gcc/rustc/cargo, read os-release
+  - Verified on device: 8/8 passed on Alpine (distro suite)
+  - Note: `git` installed but excluded from `all_tools_present()` check (git binary cannot
+    be exec'd from bionic test binary inside proot — ENOSYS on dynamic musl binary)
+
+- [ ] **T9.4** Suite: clone (CLONE_VM stripping regression)
   - Fork + exec baseline (`Command::new("echo").arg("hello").output()`)
   - `Command::new().stdout(Stdio::piped())` (triggers `clone(CLONE_VM|CLONE_VFORK)`)
   - Nested spawn: parent spawns child, child spawns grandchild
   - `std::thread::spawn()` still works (CLONE_THREAD preserved)
   - Multiple concurrent spawns (stress test)
+  - Verified on device: 4/4 passed on Alpine
 
-- [ ] **T9.4** Suite: readlink (.l2s. hiding regression)
+- [ ] **T9.5** Suite: readlink (.l2s. hiding regression)
   - `realpath` on known symlink returns path without `.l2s.`
   - `readlink` on `.l2s.` symlink returns EINVAL
   - `/proc/self/exe` does not contain `.l2s.`
   - `lstat` vs `stat` consistency on symlink targets
   - `busybox readlink` edge case (small buffer)
+  - Verified on device: 5/5 passed on Alpine
 
-- [ ] **T9.5** Suite: gcc (GCC prefix resolution)
+- [ ] **T9.6** Suite: gcc (GCC prefix resolution)
   - `cc -print-search-dirs` returns `install: /usr/lib/gcc/...`
   - Compile and run C program: `echo 'int main(){return 0;}' | cc -x c - -o /tmp/test && /tmp/test`
   - `/proc/self/exe` matches expected path after exec
+  - Verified on device: 3/3 passed on Alpine (gcc compile works inside proot!)
 
-- [ ] **T9.6** Suite: rust (Rust toolchain)
+- [ ] **T9.7** Suite: rust (Rust toolchain)
   - `rustc -vV` returns version info
   - `rustc` compiles `.rs` file to working binary
   - `cargo new --vcs none /tmp/hello && cargo build` (hello-world)
   - `cargo build` on project with dependency (e.g., `libc` crate)
+  - Verified on device: 1/3 passed, 2 failed (ENOSYS — blocked by T8.4)
 
-- [ ] **T9.7** Suite: git (Git under proot)
+- [ ] **T9.8** Suite: git (Git under proot)
   - `git init` in `/tmp`
   - `git config user.name/email`
   - `cargo new /tmp/test-repo` (tests git init via cargo, covers T8.4 regression)
+  - Verified on device: 3/3 skipped (git binary cannot be exec'd inside proot)
 
-- [ ] **T9.8** Suite: general (proot stability)
+- [ ] **T9.9** Suite: general (proot stability)
   - File I/O roundtrip: create, write, read, chmod, rename, delete in `/tmp`
   - Symlink operations: create, readlink, remove, dangling symlink handling
   - Pipe between processes: `echo foo | cat | wc -c`
   - Signal propagation: SIGINT reaches child process
   - Environment variable inheritance through proot
+  - Verified on device: 5/5 passed on Alpine
 
 ## Phase 11 — Polish & Documentation
 
