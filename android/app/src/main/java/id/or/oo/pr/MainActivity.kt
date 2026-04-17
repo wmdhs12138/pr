@@ -9,12 +9,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -132,15 +134,17 @@ fun DistroListScreen(app: App) {
                 LaunchedEffect(outputLines.size) {
                     scrollState.animateScrollTo(Int.MAX_VALUE)
                 }
-                Text(
-                    text = outputLines.joinToString("\n"),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(8.dp)
-                        .verticalScroll(scrollState),
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                SelectionContainer {
+                    Text(
+                        text = outputLines.joinToString("\n"),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(8.dp)
+                            .verticalScroll(scrollState),
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         } else {
             LazyColumn(
@@ -185,6 +189,19 @@ fun DistroListScreen(app: App) {
                                 }
                             }
                         },
+                        onTest = {
+                            if (loadingDistro == null) {
+                                loadingDistro = distro.name
+                                showOutput = true
+                                outputLines = mutableListOf("Testing ${distro.displayName}...")
+                                scope.launch {
+                                    runDistroCommand(app, "test ${distro.name}") { line ->
+                                        outputLines = (outputLines + line).toMutableList()
+                                    }
+                                    loadingDistro = null
+                                }
+                            }
+                        },
                     )
                 }
             }
@@ -199,6 +216,7 @@ fun DistroRow(
     onInstall: () -> Unit,
     onLogin: () -> Unit,
     onRemove: () -> Unit,
+    onTest: () -> Unit,
 ) {
     Card(
         modifier = Modifier
@@ -237,6 +255,13 @@ fun DistroRow(
                     if (distro.isInstalled) {
                         IconButton(onClick = onLogin) {
                             Icon(Icons.Default.PlayArrow, contentDescription = "Login")
+                        }
+                        IconButton(onClick = onTest) {
+                            Icon(
+                                Icons.Default.BugReport,
+                                contentDescription = "Test",
+                                tint = MaterialTheme.colorScheme.tertiary
+                            )
                         }
                         IconButton(onClick = onRemove) {
                             Icon(

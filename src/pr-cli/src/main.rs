@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use pr_cli::cmd_test::command_test;
 use pr_cli::color::*;
 use pr_cli::commands_extra;
 use pr_cli::install::command_install;
@@ -67,6 +68,13 @@ enum Commands {
     Copy {
         src_distro: String,
         dst_distro: String,
+    },
+    Test {
+        distro: String,
+        #[arg(short, long)]
+        suite: Option<String>,
+        #[arg(short, long)]
+        verbose: bool,
     },
     #[command(name = "clear-cache")]
     ClearCache {},
@@ -228,6 +236,16 @@ fn main() {
             dst_distro,
         } => {
             if let Err(e) = commands_extra::command_copy(&src_distro, &dst_distro) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Test {
+            distro,
+            suite,
+            verbose,
+        } => {
+            if let Err(e) = command_test(&distro, suite.as_deref(), verbose) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
