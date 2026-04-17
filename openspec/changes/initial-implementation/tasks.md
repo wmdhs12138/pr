@@ -847,13 +847,9 @@ src/proot-integration-test/
   - Note: `git` installed but excluded from `all_tools_present()` check (git binary cannot
     be exec'd from bionic test binary inside proot — ENOSYS on dynamic musl binary)
 
-- [ ] **T9.4** Suite: clone (CLONE_VM stripping regression)
-  - Fork + exec baseline (`Command::new("echo").arg("hello").output()`)
-  - `Command::new().stdout(Stdio::piped())` (triggers `clone(CLONE_VM|CLONE_VFORK)`)
-  - Nested spawn: parent spawns child, child spawns grandchild
-  - `std::thread::spawn()` still works (CLONE_THREAD preserved)
-  - Multiple concurrent spawns (stress test)
-  - Verified on device: 4/4 passed on Alpine
+- [x] **T9.4** Suite: clone (CLONE_VM stripping regression)
+  - 5 tests: fork+exec baseline, stdout piped, nested spawn, CLONE_THREAD preserved, concurrent spawn stress
+  - Verified on device: 5/5 passed on Alpine
 
 - [ ] **T9.5** Suite: readlink (.l2s. hiding regression)
   - `realpath` on known symlink returns path without `.l2s.`

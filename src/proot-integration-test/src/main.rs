@@ -120,6 +120,10 @@ const SUITES: &[Suite] = &[
                 name: "CLONE_THREAD preserved",
                 run: clone::test_thread,
             },
+            Test {
+                name: "concurrent spawn stress",
+                run: clone::test_concurrent_spawn,
+            },
         ],
     },
     Suite {

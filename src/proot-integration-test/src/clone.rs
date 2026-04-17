@@ -1,4 +1,5 @@
 use super::TestResult;
+use std::thread;
 
 pub fn probe() -> bool {
     true
@@ -62,5 +63,44 @@ pub fn test_thread() -> TestResult {
         Ok(())
     } else {
         Err(format!("expected 'thread', got {:?}", stdout))
+    }
+}
+
+pub fn test_concurrent_spawn() -> TestResult {
+    let n = 10;
+    let handles: Vec<thread::JoinHandle<Result<String, String>>> = (0..n)
+        .map(|i| {
+            thread::spawn(move || {
+                let out = std::process::Command::new("/bin/sh")
+                    .args(["-c", &format!("echo {}", i)])
+                    .stdout(std::process::Stdio::piped())
+                    .output()
+                    .map_err(|e| format!("spawn {}: {}", i, e))?;
+                let stdout = std::str::from_utf8(&out.stdout)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if stdout == i.to_string() {
+                    Ok(stdout)
+                } else {
+                    Err(format!("expected '{}' got {:?}", i, stdout))
+                }
+            })
+        })
+        .collect();
+
+    let mut results = Vec::new();
+    for (i, h) in handles.into_iter().enumerate() {
+        match h.join() {
+            Ok(Ok(s)) => results.push(s),
+            Ok(Err(e)) => return Err(format!("spawn {}: {}", i, e)),
+            Err(_) => return Err(format!("spawn {}: thread panicked", i)),
+        }
+    }
+
+    if results.len() == n {
+        Ok(())
+    } else {
+        Err(format!("expected {} results, got {}", n, results.len()))
     }
 }
