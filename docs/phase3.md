@@ -357,18 +357,18 @@ Neither busybox nor bash have PT_TLS segments (no alignment issues). Only proot 
 
 ```bash
 # Download binaries (from project root)
-./download-busybox.sh     # → build/assets/arm64-v8a/busybox (1.1MB)
-./download-bash.sh        # → build/assets/arm64-v8a/bash (2.3MB)
+scripts/download-busybox.sh     # → build/assets/arm64-v8a/busybox (1.1MB)
+scripts/download-bash.sh        # → build/assets/arm64-v8a/bash (2.3MB)
 
 # Build proot (from Phase 1)
-./build.sh --arch=arm64   # → build/out/arm64/proot (2.5MB)
+scripts/build.sh --arch=arm64   # → build/out/arm64/proot (2.5MB)
 
 # Test on device
-./test-push.sh setup      # Push binaries + run bootstrap.sh
-./test-push.sh test       # Push + bootstrap + proot-distro list
-./test-push.sh shell      # Push + bootstrap + interactive bash
+scripts/test-push.sh setup      # Push binaries + run bootstrap.sh
+scripts/test-push.sh test       # Push + bootstrap + proot-distro list
+scripts/test-push.sh shell      # Push + bootstrap + interactive bash
 
 # Verify binaries without device
-./download-busybox.sh --verify-only
-./download-bash.sh --verify-only
+scripts/download-busybox.sh --verify-only
+scripts/download-bash.sh --verify-only
 ```

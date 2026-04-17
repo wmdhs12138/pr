@@ -2,26 +2,27 @@
 # Push test environment to device using bootstrap.sh
 #
 # Usage:
-#   ./test-push.sh              # Push files only
-#   ./test-push.sh setup        # Push + run bootstrap
-#   ./test-push.sh test         # Push + bootstrap + proot-distro list
-#   ./test-push.sh shell        # Push + bootstrap + interactive shell
+#   scripts/test-push.sh              # Push files only
+#   scripts/test-push.sh setup        # Push + run bootstrap
+#   scripts/test-push.sh test         # Push + bootstrap + proot-distro list
+#   scripts/test-push.sh shell        # Push + bootstrap + interactive shell
 #
 # Prerequisites:
 #   - adb in PATH, device connected
-#   - proot built:     ./build.sh --arch=arm64
-#   - busybox ready:   ./download-busybox.sh
-#   - bash ready:      ./download-bash.sh
+#   - proot built:     scripts/build.sh --arch=arm64
+#   - busybox ready:   scripts/download-busybox.sh
+#   - bash ready:      scripts/download-bash.sh
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROOT="${SCRIPT_DIR}/build/out/arm64/proot"
-BB="${SCRIPT_DIR}/build/assets/arm64-v8a/busybox"
-BASH="${SCRIPT_DIR}/build/assets/arm64-v8a/bash"
-PDISTRO="${SCRIPT_DIR}/src/scripts/proot-distro.sh"
-BOOTSTRAP="${SCRIPT_DIR}/src/scripts/bootstrap.sh"
-PLUGINS="${SCRIPT_DIR}/src/scripts/plugins"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROOT="${PROJECT_ROOT}/build/out/arm64/proot"
+BB="${PROJECT_ROOT}/build/assets/arm64-v8a/busybox"
+BASH="${PROJECT_ROOT}/build/assets/arm64-v8a/bash"
+PDISTRO="${PROJECT_ROOT}/src/scripts/proot-distro.sh"
+BOOTSTRAP="${PROJECT_ROOT}/src/scripts/bootstrap.sh"
+PLUGINS="${PROJECT_ROOT}/src/scripts/plugins"
 
 DEVICE_PREFIX="/data/local/tmp/pr-test/usr"
 
@@ -33,9 +34,9 @@ check_file() {
     fi
 }
 
-check_file "$PROOT" "proot binary" "Run: ./build.sh --arch=arm64"
-check_file "$BB" "busybox" "Run: ./download-busybox.sh"
-check_file "$BASH" "bash" "Run: ./download-bash.sh"
+check_file "$PROOT" "proot binary" "Run: scripts/build.sh --arch=arm64"
+check_file "$BB" "busybox" "Run: scripts/download-busybox.sh"
+check_file "$BASH" "bash" "Run: scripts/download-bash.sh"
 check_file "$PDISTRO" "proot-distro.sh" ""
 check_file "$BOOTSTRAP" "bootstrap.sh" ""
 

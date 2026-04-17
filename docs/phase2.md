@@ -423,7 +423,7 @@ bash proot-distro remove alpine
 
 ```bash
 # 1. Build proot
-./build.sh --arch=arm64
+scripts/build.sh --arch=arm64
 
 # 2. Get test binaries
 # busybox-static (from Alpine repo):

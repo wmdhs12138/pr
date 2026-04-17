@@ -239,7 +239,7 @@ src/proot/src/loader/loader-info.awk              # Rewritten for POSIX awk
 ```bash
 # Prerequisites: make, python3, readelf, file, curl, unzip, ~2GB disk for NDK
 
-./build.sh --arch=arm64
+scripts/build.sh --arch=arm64
 
 # Output: build/out/arm64/proot (2.5MB)
 # TLS alignment is automatically patched to 64 bytes

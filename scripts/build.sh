@@ -2,14 +2,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR="${SCRIPT_DIR}/build"
-SRC_DIR="${SCRIPT_DIR}/src/proot"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BUILD_DIR="${PROJECT_ROOT}/build"
+SRC_DIR="${PROJECT_ROOT}/src/proot"
 
 NDK_VERSION="r27c"
 NDK_URL_BASE="https://dl.google.com/android/repository"
 
-TALLOC_SRC="${SCRIPT_DIR}/vendor/samba/lib/talloc"
-TALLOC_STUB="${SCRIPT_DIR}/src/proot/lib/talloc"
+TALLOC_SRC="${PROJECT_ROOT}/vendor/samba/lib/talloc"
+TALLOC_STUB="${PROJECT_ROOT}/src/proot/lib/talloc"
 
 API_LEVEL=28
 

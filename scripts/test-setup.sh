@@ -2,7 +2,7 @@
 # Setup test environment for proot-distro.sh on Android device
 #
 # Prerequisites (run from project root on host):
-#   1. Build proot:        ./build.sh
+#   1. Build proot:        scripts/build.sh
 #   2. Extract busybox:    tar xzf build/test-binaries/busybox-static.apk -C build/test-binaries/extracted/
 #   3. Push everything:    adb push build/out/arm64/proot /data/local/tmp/
 #                          adb push build/test-binaries/extracted/bin/busybox.static /data/local/tmp/
