@@ -856,10 +856,8 @@ src/proot-integration-test/
     lstat vs stat, readlink small buffer (gcc-compiled C program with 4-byte buffer)
   - Verified on device: 6/6 passed on Alpine
 
-- [ ] **T9.6** Suite: gcc (GCC prefix resolution)
-  - `cc -print-search-dirs` returns `install: /usr/lib/gcc/...`
-  - Compile and run C program: `echo 'int main(){return 0;}' | cc -x c - -o /tmp/test && /tmp/test`
-  - `/proc/self/exe` matches expected path after exec
+- [x] **T9.6** Suite: gcc (GCC prefix resolution)
+  - 3 tests: cc -print-search-dirs, compile and run C program, /proc/self/exe after exec
   - Verified on device: 3/3 passed on Alpine (gcc compile works inside proot!)
 
 - [ ] **T9.7** Suite: rust (Rust toolchain)
