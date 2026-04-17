@@ -775,37 +775,142 @@ Both tests documented with code in `docs/phase8.md`.
   - Verify no regression in C/C++ compilation
   - Verify no regression in proot login/session stability
 
-## Phase 9 — Polish & Documentation
+- [ ] **T8.4** Fix git lock file issue under proot
+  - `cargo new /tmp/hello` fails: "failed to create locked file .git/config.lock: file exists"
+  - Workaround: `cargo new --vcs none /tmp/hello` works
+  - Likely related to git's lock file handling under proot filesystem virtualization
+  - Needs investigation: flock, openat, or symlink resolution issue
 
-- [ ] **T9.1** Rootfs mirror setup
+## Phase 9 — Proot Integration Test Suite
+
+Automated regression testing for proot behavior inside Linux distros (Alpine,
+Debian, etc.). A static musl guest binary runs inside proot via `pr-cli test <distro>`,
+exercising syscall interception, filesystem virtualization, and toolchain support.
+
+### Architecture
+
+- **Guest binary** (`src/proot-integration-test/`): static musl, runs inside proot,
+  outputs TAP protocol, auto-probes prerequisites and skips unavailable tests
+- **Host runner** (`pr-cli test <distro>` subcommand): deploys guest binary from APK
+  assets to rootfs, invokes proot, parses TAP, presents results
+- **Multi-distro**: works with any installed distro (Alpine, Debian, etc.) — the guest
+  binary is statically linked against musl, runs on both musl and glibc
+
+### Project structure
+
+```
+src/proot-integration-test/
+  Cargo.toml              aarch64-unknown-linux-musl, libc dep only
+  .cargo/config.toml      musl cross-linker
+  src/main.rs             proot-integration-test [suite|all] [--tap]
+  src/clone.rs            CLONE_VM stripping tests
+  src/readlink.rs         .l2s. hiding, readlink, realpath tests
+  src/gcc.rs              GCC prefix resolution, C compilation tests
+  src/rust.rs             rustc, cargo build tests
+  src/git.rs              git init, lock files, cargo new tests
+  src/general.rs          file I/O, symlinks, pipes, signals tests
+
+src/pr-cli/
+  src/cmd_test.rs         NEW: pr-cli test <distro> [suite]
+  src/test_runner.rs      NEW: deploy binary, invoke proot, parse TAP
+
+android/app/src/main/assets/
+  proot-integration-test  Guest binary packaged in APK
+```
+
+### Tasks
+
+- [x] **T9.1** Create `src/proot-integration-test/` project
+  - `Cargo.toml`: `libc = "0.2"` dependency, release profile with size optimizations
+  - `src/main.rs`: TAP-format test runner with subcommand dispatch
+    - `proot-integration-test [suite|all]`
+    - Each suite auto-probes prerequisites, emits `ok # SKIP <reason>` if unavailable
+    - TAP output: `1..N`, `ok <n> - <name>`, `not ok <n> - <name>`, `ok <n> - <name> # SKIP <reason>`
+  - Module stubs with probe + tests: `clone.rs` (4), `readlink.rs` (5), `gcc.rs` (3), `rust.rs` (3), `git.rs` (3), `general.rs` (5)
+  - No cross-compilation setup — builds on-device inside proot via `cargo build`
+  - Verified: `cargo check` passes with zero warnings
+
+- [ ] **T9.2** Add `pr-cli test <distro>` subcommand
+  - `src/cmd_test.rs`: CLI parsing — `pr-cli test <distro> [suite] [--verbose]`
+  - `src/test_runner.rs`:
+    - Resolve distro rootfs path from `installed-rootfs/<distro>/`
+    - Deploy: copy guest binary from APK assets to `<rootfs>/tmp/proot-integration-test`
+      (skip if already deployed and same version/hash)
+    - Invoke: same mechanism as `pr-cli login <distro> -- /tmp/proot-integration-test <suite>`
+    - Parse TAP: line-by-line, collect pass/fail/skip counts
+    - Report: table of suite results, summary line, list of failures
+  - Add `proot-integration-test` binary to APK assets (`android/app/src/main/assets/`)
+  - Add build step to `src/pr-cli/build-pr-cli.sh` or create separate build script
+  - Verify: `pr-cli test alpine` runs all suites and reports results
+
+- [ ] **T9.3** Suite: clone (CLONE_VM stripping regression)
+  - Fork + exec baseline (`Command::new("echo").arg("hello").output()`)
+  - `Command::new().stdout(Stdio::piped())` (triggers `clone(CLONE_VM|CLONE_VFORK)`)
+  - Nested spawn: parent spawns child, child spawns grandchild
+  - `std::thread::spawn()` still works (CLONE_THREAD preserved)
+  - Multiple concurrent spawns (stress test)
+
+- [ ] **T9.4** Suite: readlink (.l2s. hiding regression)
+  - `realpath` on known symlink returns path without `.l2s.`
+  - `readlink` on `.l2s.` symlink returns EINVAL
+  - `/proc/self/exe` does not contain `.l2s.`
+  - `lstat` vs `stat` consistency on symlink targets
+  - `busybox readlink` edge case (small buffer)
+
+- [ ] **T9.5** Suite: gcc (GCC prefix resolution)
+  - `cc -print-search-dirs` returns `install: /usr/lib/gcc/...`
+  - Compile and run C program: `echo 'int main(){return 0;}' | cc -x c - -o /tmp/test && /tmp/test`
+  - `/proc/self/exe` matches expected path after exec
+
+- [ ] **T9.6** Suite: rust (Rust toolchain)
+  - `rustc -vV` returns version info
+  - `rustc` compiles `.rs` file to working binary
+  - `cargo new --vcs none /tmp/hello && cargo build` (hello-world)
+  - `cargo build` on project with dependency (e.g., `libc` crate)
+
+- [ ] **T9.7** Suite: git (Git under proot)
+  - `git init` in `/tmp`
+  - `git config user.name/email`
+  - `cargo new /tmp/test-repo` (tests git init via cargo, covers T8.4 regression)
+
+- [ ] **T9.8** Suite: general (proot stability)
+  - File I/O roundtrip: create, write, read, chmod, rename, delete in `/tmp`
+  - Symlink operations: create, readlink, remove, dangling symlink handling
+  - Pipe between processes: `echo foo | cat | wc -c`
+  - Signal propagation: SIGINT reaches child process
+  - Environment variable inheritance through proot
+
+## Phase 11 — Polish & Documentation
+
+- [ ] **T11.1** Rootfs mirror setup
   - Configure pr.oo.or.id/dl/rootfs/ as fallback mirror
   - Add mirror URL configuration to app settings
 
-- [ ] **T9.2** Error handling
+- [ ] **T11.2** Error handling
   - Handle download failures gracefully
   - Handle extraction failures (clean up partial rootfs)
   - Handle proot crash (inform user)
   - Handle SELinux ptrace denial (show explanatory message)
 
-- [ ] **T9.3** README and user documentation
+- [ ] **T11.3** README and user documentation
   - Write README.md for github.com/oonid/pr
   - Include project name explanation: pr = PRoot = ptrace-based root (see docs/name.md)
   - Document supported devices and known limitations
   - Document how to add custom distro plugins
   - Document how to build from source
 
-- [ ] **T9.4** CI/CD setup
+- [ ] **T11.4** CI/CD setup
   - GitHub Actions workflow for building proot binary
   - GitHub Actions workflow for building APK
   - Release automation
 
-- [ ] **T9.5** App signing and release
+- [ ] **T11.5** App signing and release
   - Generate signing key
   - Configure release build type
   - Create first release APK
   - Push to github.com/oonid/pr releases
 
-## Phase 10 — mksh Port of proot-distro.sh (CANCELLED)
+## Phase 12 — mksh Port of proot-distro.sh (CANCELLED)
 
 This phase was the alternative to Phase 6's Rust approach. Since Phase 6 (pr-cli) is
 complete and working, the mksh port is no longer needed. Rust gives us type safety,
