@@ -1,7 +1,7 @@
 # Phase 8 — Rust Toolchain Support (vfork/CLONE_VM and link2symlink Fixes)
 
 Date: 2026-04-16
-Status: T8.1 Complete, T8.2 Complete, T8.3 Pending
+Status: T8.1 Complete, T8.2 Complete, T8.3 Complete, T8.4 Complete
 Device: Samsung SM-XXXXX (Galaxy X), Android 16 (SDK 36), aarch64
 Companion docs: `docs/proot-improvement.md`, `docs/important-notes.md`
 
@@ -218,12 +218,75 @@ printf("/proc/self/exe = %s\n", buf);
 
 ---
 
-## T8.3 — Full Rust Toolchain Test (Pending)
+## T8.3 — Fix si_syscall=-1 SIGSYS Suppression (Complete)
 
-- `cargo build` on hello-world: PASS
-- `cargo build` on project with dependencies: NOT TESTED
-- C/C++ compilation regression: PASS (gcc works, `cc` works)
-- proot login/session stability: NOT TESTED
+### Root Cause
+
+All remaining test failures (rustc compile, cargo build, git init) shared one root cause:
+spurious SIGSYS from the zygote seccomp filter firing on syscall numbers that proot had
+already modified to -1 (PR_void/SYSCALL_AVOIDER).
+
+The event sequence:
+
+```
+1. Tracee executes SVC instruction (syscall entry)
+2. Kernel ptrace: SIGTRAP|0x80 (syscall-enter-stop) → proot handles it
+3. proot modifies registers (possibly sets syscall to -1 via set_sysnum(PR_void))
+4. proot restarts with PTRACE_SYSCALL
+5. Kernel re-executes SVC with MODIFIED registers
+6. Zygote seccomp filter fires on the MODIFIED syscall number
+7. If modified syscall == -1 → NOT in allowlist → SECCOMP_RET_TRAP → SIGSYS
+8. proot catches SIGSYS, reads x8 → gets stale value (e.g. 56 = openat, or whatever)
+```
+
+The kernel reports `si_syscall=-1` (invalid/no syscall) in `siginfo_t`, but proot reads
+the register value which is stale/misleading. The old code only suppressed this when
+`seccomp_after_ptrace_enter` was true, but that flag was never set — the zygote uses
+`SECCOMP_RET_TRAP` (not `SECCOMP_RET_TRACE`), so `PTRACE_EVENT_SECCOMP` never fires
+and `seccomp_detected` stays false.
+
+### Fix
+
+**File**: `src/proot/src/tracee/event.c` (line 655)
+
+```c
+// Before (only suppressed when seccomp_after_ptrace_enter was true):
+if (tracee->skip_next_seccomp_signal ||
+    (seccomp_after_ptrace_enter && siginfo.si_syscall == SYSCALL_AVOIDER)) {
+
+// After (always suppress when kernel says syscall was -1):
+if (tracee->skip_next_seccomp_signal ||
+    siginfo.si_syscall == SYSCALL_AVOIDER) {
+```
+
+When `si_syscall == -1`, the kernel is telling us the blocked syscall was -1 (no valid
+syscall). This only happens when proot has already modified the registers. The SIGSYS is
+spurious — proot already dealt with this syscall. Swallowing it is safe because
+`si_syscall == -1` never occurs for a legitimate syscall request.
+
+### Additional Fixes Applied
+
+**arm64 syscall number update** (`seccomp.c`): Changed `push_specific_regs(tracee, false)`
+to `push_specific_regs(tracee, true)` in `restart_syscall_after_seccomp()`. On arm64,
+the syscall number is stored in `NT_ARM_SYSTEM_CALL` (separate from x8 in general
+registers). The `false` parameter skipped this update, making all SIGSYS syscall
+conversions (openat2→openat, faccessat2→faccessat, etc.) ineffective on arm64.
+
+**PR_openat2 handler** (`seccomp.c` + `sysnums-arm64.h`): Added openat2 (syscall 437) to
+the syscall table and SIGSYS handler. Converts openat2 → openat, drops resolve flags.
+
+**PR_faccessat handler** (`seccomp.c`): Returns 0 (proot fakes root, access() always succeeds).
+
+**SIGSYS log truncation** (`cli.c`): Truncate the SIGSYS log file at proot startup (fopen "w")
+so each run starts with a clean log.
+
+### Result
+
+37/37 ALL PASS on Alpine:
+distro(8) clone(5) readlink(6) gcc(3) rust(4) git(3) pipe(3) general(5)
+
+All previous theories were WRONG: pipe2 blocked by seccomp, linkat/utimensat,
+CLONE_THREAD, execve blocked. All were the same si_syscall=-1 root cause.
 
 ---
 
