@@ -487,6 +487,7 @@ fn write_config_files(rootfs: &str, distro_name: &str) -> Result<(), String> {
                 .env("PROOT_LOADER", get_native_loader())
                 .args([
                     "--link2symlink",
+                    "--change-id=0:0",
                     "-b",
                     &format!("{}:/etc/proot-distro", plugins_dir),
                     "-r",

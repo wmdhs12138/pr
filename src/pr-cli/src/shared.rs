@@ -217,13 +217,11 @@ pub fn build_proot_args(
 
     args.push("-L".to_string());
 
-    let hostname = "localhost";
     let kernel_release = std::env::var("PROOT_DISTRO_KERNEL_RELEASE")
         .unwrap_or_else(|_| DEFAULT_FAKE_KERNEL_RELEASE.to_string());
-    let machine = std::env::var("PROOT_DISTRO_MACHINE").unwrap_or_else(|_| "aarch64".to_string());
     args.push(format!(
-        "--kernel-release=Linux\\{}\\{}\\{}\\{}\\localdomain\\-1\\",
-        hostname, kernel_release, DEFAULT_FAKE_KERNEL_VERSION, machine
+        "--kernel-release={}",
+        kernel_release,
     ));
 
     if !no_link2symlink {
@@ -231,6 +229,8 @@ pub fn build_proot_args(
     }
 
     args.push("--kill-on-exit".to_string());
+
+    args.push("--change-id=0:0".to_string());
 
     args.push(format!("--rootfs={}", rootfs));
     args.push("--cwd=/".to_string());
