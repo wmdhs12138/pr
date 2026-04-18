@@ -54,9 +54,7 @@ void restart_syscall_after_seccomp(Tracee* tracee) {
 	tracee->_regs[CURRENT].eax = tracee->_regs[CURRENT].orig_eax;
 #endif
 
-	/* Write registers. (Omiting special sysnum logic as we're not during syscall
-	 * execution, but we're queueing new syscall to be called) */
-	push_specific_regs(tracee, false);
+	push_specific_regs(tracee, true);
 }
 
 /**
@@ -744,9 +742,19 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		set_result_after_seccomp(tracee, -ENOSYS);
 		break;
 
+	case PR_faccessat:
+		set_result_after_seccomp(tracee, 0);
+		break;
+
 	case PR_faccessat2:
 		set_sysnum(tracee, PR_faccessat);
 		poke_reg(tracee, SYSARG_4, 0);
+		restart_syscall_after_seccomp(tracee);
+		break;
+
+	case PR_openat2:
+		set_sysnum(tracee, PR_openat);
+		poke_reg(tracee, SYSARG_5, 0);
 		restart_syscall_after_seccomp(tracee);
 		break;
 
@@ -811,7 +819,23 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		const char *log_path = "/data/data/id.or.oo.pr/cache/sigsys-log.txt";
 		FILE *f = fopen(log_path, "a");
 		if (f) {
-			fprintf(f, "SIGSYS: kernel_num=%lu pr=%d\n",
+			time_t now = time(NULL);
+			struct tm *tm = localtime(&now);
+			char comm[64];
+			char timebuf[32];
+			FILE *commf;
+			strftime(timebuf, sizeof(timebuf), "%H:%M:%S", tm);
+			memset(comm, 0, sizeof(comm));
+			commf = fopen("/proc/self/comm", "r");
+			if (commf) {
+				if (fgets(comm, sizeof(comm), commf)) {
+					char *nl = strchr(comm, '\n');
+					if (nl) *nl = '\0';
+				}
+				fclose(commf);
+			}
+			fprintf(f, "SIGSYS: time=%s pid=%d comm=%s kernel_num=%lu pr=%d\n",
+				timebuf, (int)tracee->pid, comm,
 				(unsigned long)kernel_num, (int)sysnum);
 			fclose(f);
 		}

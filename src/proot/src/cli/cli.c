@@ -491,6 +491,12 @@ int main(int argc, char *const argv[])
 		goto error;
 	}
 
+	{
+		const char *log_path = "/data/data/id.or.oo.pr/cache/sigsys-log.txt";
+		FILE *f = fopen(log_path, "w");
+		if (f) fclose(f);
+	}
+
 	/* Start tracing the first tracee and all its children.  */
 	exit(event_loop());
 

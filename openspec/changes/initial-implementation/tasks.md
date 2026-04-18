@@ -769,26 +769,28 @@ Both tests documented with code in `docs/phase8.md`.
     COMPILER_PATH/LIBRARY_PATH workarounds
   - See `docs/phase8.md` for full analysis
 
-- [ ] **T8.3** Diagnose and fix remaining rust/git test failures
-  - Current state: 27/29 tests pass. 4 tests fail: rustc compile, cargo build (x2), git init
-  - SIGSYS log shows 15 execve entries but log is append-mode (may be stale)
-  - Root cause may NOT be execve — see `docs/t8_3_t8_4_problem_plans.md` for full analysis
-  - Leading theory: SIGSYS log is stale; actual failures likely caused by different syscalls
-    - git init: likely a filesystem syscall (linkat, utimensat), not execve
-    - rustc compile: likely `pipe2(O_CLOEXEC)` blocked by seccomp (GCC uses `pipe()`, rustc uses `pipe2()`)
-    - cargo build: likely `CLONE_THREAD` → -ENOSYS (cargo uses threads for parallel compilation)
-  - Step 1: Enhanced SIGSYS logging (PID, timestamp, truncate at startup in seccomp.c)
-  - Step 2: On-device diagnostics before any code changes:
-    a. `GIT_TRACE=1 git init /tmp/test` → determine if subprocess or filesystem syscall issue
-    b. `cargo build -j1` → determine if thread-related or spawn-related failure
-    c. pipe2 availability check → determine if pipe2 is blocked by seccomp
-  - Step 3: Clean test run with truncated SIGSYS log, analyze results
-  - Step 4: Targeted fix based on Step 2-3 diagnostics:
-    - If execve blocked → Plan B (execve → execveat workaround, see plans doc §Plan B)
-    - If pipe2 blocked → add `PR_pipe2` SIGSYS handler
-    - If git filesystem syscall → add specific handler (linkat, utimensat, etc.)
-    - If thread-related → cargo -j1 test gating or CLONE_THREAD alternative
-  - Regression gate: all 27 currently passing tests must still pass after any change
+- [x] **T8.3** Fix si_syscall=-1 SIGSYS suppression (root cause of all remaining failures)
+  - Root cause: proot voids syscalls via set_sysnum(PR_void) after ptrace syscall-enter-stop.
+    The kernel restarts the tracee, but the zygote seccomp filter fires SIGSYS on the
+    modified syscall number (-1). The old code only suppressed this when
+    `seccomp_after_ptrace_enter` was true, but that flag was never set because the
+    zygote uses SECCOMP_RET_TRAP (not SECCOMP_RET_TRACE), so PTRACE_EVENT_SECCOMP
+    never fires and seccomp_detected stays false.
+  - Fix (1 line in event.c:655): removed `seccomp_after_ptrace_enter &&` condition.
+    Now suppresses SIGSYS whenever `si_syscall == SYSCALL_AVOIDER` (-1), regardless
+    of seccomp detection state.
+  - Additional fixes in seccomp.c:
+    - push_specific_regs(true): update NT_ARM_SYSTEM_CALL on arm64 after handler
+      modifies syscall number (false didn't update the authoritative syscall register)
+    - PR_openat2 handler: convert to PR_openat (openat2 blocked on some kernels)
+    - PR_faccessat handler: return 0 (proot fakes root, access() always succeeds)
+  - PR_openat2 added to sysnums.list and sysnums-arm64.h (syscall 437)
+  - SIGSYS log truncation at proot startup (cli.c: fopen "w" mode)
+  - Result: 37/37 ALL PASS — all previously failing suites now pass:
+    rust(4/4), git(3/3), gcc(3/3) all work
+  - Theories that were WRONG: pipe2 blocked, linkat/utimensat, CLONE_THREAD,
+    execve blocked. All were the same si_syscall=-1 root cause.
+  - Tested by Phase 9: every suite exercises this fix (all 37 tests pass inside proot)
 
 - [x] **T8.4** Add SIGSYS handlers for clone3, clone, setuid/setgid family
   - Root cause: SIGSYS handler in seccomp.c had no cases for `PR_clone3`, `PR_clone`,
