@@ -1,11 +1,13 @@
 use std::env;
 use std::process;
+use std::time::Instant;
 
 mod clone;
 mod distro;
 mod gcc;
 mod general;
 mod git;
+mod pipe;
 mod readlink;
 mod rust;
 
@@ -215,6 +217,24 @@ const SUITES: &[Suite] = &[
         ],
     },
     Suite {
+        name: "pipe",
+        probe: pipe::probe,
+        tests: &[
+            Test {
+                name: "pipe() baseline",
+                run: pipe::test_pipe_baseline,
+            },
+            Test {
+                name: "pipe2(O_CLOEXEC)",
+                run: pipe::test_pipe2_cloexec,
+            },
+            Test {
+                name: "pipe2(O_NONBLOCK)",
+                run: pipe::test_pipe2_nonblock,
+            },
+        ],
+    },
+    Suite {
         name: "general",
         probe: general::probe,
         tests: &[
@@ -243,13 +263,17 @@ const SUITES: &[Suite] = &[
 ];
 
 fn run_suite(suite: &Suite, reporter: &mut TapReporter) {
+    eprintln!("[* Running test suite: {}... {}", suite.name, now());
+
     if !(suite.probe)() {
         for test in suite.tests {
             reporter.skip(reporter.total() + 1, test.name, "prerequisites not met");
         }
+        eprintln!("[* Suite {} done (skipped)]", suite.name);
         return;
     }
 
+    let start = Instant::now();
     for test in suite.tests {
         let num = reporter.total() + 1;
         match (test.run)() {
@@ -257,6 +281,15 @@ fn run_suite(suite: &Suite, reporter: &mut TapReporter) {
             Err(e) => reporter.not_ok(num, test.name, &e),
         }
     }
+    eprintln!("[* Suite {} done in {:.1}s]", suite.name, start.elapsed().as_secs_f64());
+}
+
+fn now() -> String {
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = d.as_secs() % 86400;
+    format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
 }
 
 fn main() {
@@ -282,6 +315,7 @@ fn main() {
     let total_tests: usize = selected.iter().map(|s| s.tests.len()).sum();
     println!("1..{}", total_tests);
 
+    let total_start = Instant::now();
     let mut reporter = TapReporter::new();
     for suite in &selected {
         run_suite(suite, &mut reporter);
@@ -289,8 +323,9 @@ fn main() {
 
     eprintln!("");
     eprintln!(
-        "{} passed, {} failed, {} skipped",
-        reporter.passed, reporter.failed, reporter.skipped
+        "{} passed, {} failed, {} skipped in {:.1}s",
+        reporter.passed, reporter.failed, reporter.skipped,
+        total_start.elapsed().as_secs_f64()
     );
 
     if !reporter.failures.is_empty() {
