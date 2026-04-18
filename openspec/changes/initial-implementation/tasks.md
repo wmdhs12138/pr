@@ -896,15 +896,15 @@ src/proot-integration-test/
   - Verifies T8.3 (si_syscall=-1 suppression) and T8.4 (SIGSYS handlers for clone3/clone)
   - Key diagnostic: `cargo build -j1` — if passes, failure is thread-related; if fails, spawn-related
 
-- [ ] **T9.8** Suite: git (Git under proot)
+- [x] **T9.8** Suite: git (Git under proot)
   - 3 tests: git init, git config, cargo new with vcs git
-  - Probe: checks `/usr/bin/git` existence
-  - Verified on device: 1/3 passed (git config — fixed by T8.4 setuid/setgid handlers)
-    - git init: fails — root cause TBD (may be filesystem syscall, not execve)
-    - cargo new with vcs git: fails (depends on git init)
-  - Blocked by T8.3 (diagnostic + targeted fix)
-  - Key diagnostic: `GIT_TRACE=1 git init /tmp/test 2>&1` — if no subprocess spawn
-    but init still fails, the failure is a filesystem syscall (linkat, utimensat, etc.)
+  - Probe: checks `/usr/bin/git` existence (Path::exists)
+  - Evaluated: 3/3 via both run-as and app UI
+  - Previously 1/3 (only git config passed). All 3 now pass after T8.3 fix
+    (si_syscall=-1 suppression in event.c). The earlier theory that git init
+    failed due to filesystem syscalls (linkat, utimensat) was wrong — the
+    actual root cause was the same SIGSYS loop that affected all suites.
+  - Verifies T8.3 (si_syscall=-1 suppression) and T8.4 (setuid/setgid handlers)
 
 - [ ] **T9.9** Suite: general (proot stability)
   - File I/O roundtrip: create, write, read, chmod, rename, delete in `/tmp`
