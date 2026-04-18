@@ -210,7 +210,7 @@ fn install_tools(rootfs: &str, pkg_mgr: &str) -> Result<(), String> {
 
     let cmd = match pkg_mgr {
         "apk" => "apk update 2>&1 && apk add --no-progress vim gcc rust cargo git 2>&1",
-        "apt" => "apt-get update -qq 2>&1 && apt-get install -y -qq vim gcc rust cargo git 2>&1",
+        "apt" => "apt-get update -qq 2>&1 && apt-get install -y -qq vim gcc rustc cargo git 2>&1",
         _ => return Err(format!("unknown package manager: {}", pkg_mgr)),
     };
 
