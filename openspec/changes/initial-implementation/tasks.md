@@ -280,13 +280,26 @@
   - `extractNativeLibs=true` + `useLegacyPackaging=true` for uncompressed extraction
   - BootstrapService copies from nativeLibraryDir to files/usr/bin/proot
 
-- [x] **T4.7** Bundle assets
+ - [x] **T4.7** Bundle assets
   - `assets/bin/busybox` (1.1MB, from build/assets/arm64-v8a/busybox)
   - `assets/bin/bash` (2.3MB, from build/assets/arm64-v8a/bash)
   - `assets/scripts/proot-distro.sh` (with @APP_PREFIX@ template)
   - `assets/scripts/bootstrap.sh` (POSIX sh setup script)
   - `assets/plugins/*.sh` (14 distro plugins)
   - Total APK: 15MB (debug, uncompressed)
+
+- [ ] **T4.8** Add dark mode support (follow system setting)
+  - Current state: `themes.xml` uses `Theme.AppCompat.DayNight` (already DayNight-aware),
+    but Compose `MaterialTheme` at MainActivity.kt:43 does not pass a `colorScheme`,
+    defaulting to light-only regardless of system setting
+  - Fix: ~10 lines in `MainActivity.kt` — add dynamic color scheme that follows system:
+    - Android 12+ (API 31+): Material You dynamic colors (`dynamicDarkColorScheme` /
+      `dynamicLightColorScheme`) matching user's wallpaper
+    - Android 9-11 (API 28-30): Standard Material 3 `darkColorScheme()` / `lightColorScheme()`
+    - No manual toggle needed — automatically follows device dark/light mode setting
+  - All UI colors already use `MaterialTheme.colorScheme.*` (primary, tertiary, error,
+    outline, background, etc.) — no per-component changes needed
+  - ANSI color codes in test output already stripped by `runDistroCommand` — works in both modes
 
 ## Phase 5 — Distro Plugins & Testing
 
