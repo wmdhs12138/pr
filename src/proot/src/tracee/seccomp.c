@@ -759,27 +759,6 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		set_result_after_seccomp(tracee, 0);
 		break;
 
-	case PR_execve:
-		restart_syscall_after_seccomp(tracee);
-		break;
-
-	case PR_execveat:
-	{
-		word_t dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
-		if ((int)dirfd == AT_FDCWD) {
-			set_sysnum(tracee, PR_execve);
-			poke_reg(tracee, SYSARG_1, peek_reg(tracee, CURRENT, SYSARG_2));
-			poke_reg(tracee, SYSARG_2, peek_reg(tracee, CURRENT, SYSARG_3));
-			poke_reg(tracee, SYSARG_3, peek_reg(tracee, CURRENT, SYSARG_4));
-		}
-		restart_syscall_after_seccomp(tracee);
-		break;
-	}
-
-	case PR_brk:
-		restart_syscall_after_seccomp(tracee);
-		break;
-
 	case PR_clone3:
 	{
 		word_t args_ptr = peek_reg(tracee, ORIGINAL, SYSARG_1);
