@@ -127,7 +127,7 @@ fn parse_tap(tap_output: &str) -> TapResult {
 
 fn run_proot_streaming(rootfs: &str, cmd: &str) -> Result<(), String> {
     let proot = get_native_proot();
-    let args = build_proot_args(rootfs, false, false, &[]);
+    let args = build_proot_args(rootfs, true, false, &[]);
     let runtime_env = build_proot_runtime_env();
     let child_env = build_proot_child_env();
 
