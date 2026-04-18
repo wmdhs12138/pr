@@ -97,7 +97,7 @@ if(n<0)return 1;b[n]='\0';printf("%s\n",b);return 0;}"#;
         let _ = fs::remove_file(c_path);
         return Err(format!(
             "cc failed: {}",
-            std::str::from_utf8(&compile.stderr).unwrap_or("?")
+            std::str::from_utf8(&compile.stdout).unwrap_or("?")
         ));
     }
 

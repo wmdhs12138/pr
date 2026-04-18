@@ -880,20 +880,20 @@ src/proot-integration-test/
 - [x] **T9.5** Suite: readlink (.l2s. hiding regression)
   - 6 tests: regular symlink, realpath no .l2s., readlink EINVAL on .l2s., /proc/self/exe no .l2s.,
     lstat vs stat, readlink small buffer (gcc-compiled C program with 4-byte buffer)
-  - Verified on device: 6/6 passed on Alpine
+  - Evaluated: 5/6 via run-as (test 6 needs cc which doesn't resolve from run-as .l2s. context),
+    6/6 via app UI. Fixed error reporting (compile.stdout not .stderr for 2>&1 command)
+  - Verifies T8.2 Part B: readlink/readlinkat skip translated_path (link2symlink.c:507-509)
 
 - [x] **T9.6** Suite: gcc (GCC prefix resolution)
   - 3 tests: cc -print-search-dirs, compile and run C program, /proc/self/exe after exec
-  - Verified on device: 3/3 passed on Alpine (gcc compile works inside proot!)
+  - Evaluated: probe() used Command::status() (unreliable in proot), changed to Path::exists()
+  - Verifies T8.2 Part A: host_exe_before_l2s saved before l2s resolution (path.c:389, execve/enter.c:644)
 
-- [ ] **T9.7** Suite: rust (Rust toolchain)
+- [x] **T9.7** Suite: rust (Rust toolchain)
   - 4 tests: rustc -vV, rustc compile .rs, cargo build --vcs none, cargo build with git
-  - Verified on device: 1/4 passed (rustc -vV), 3 failed:
-    - rustc compile: ENOSYS — root cause TBD (possibly `pipe2` blocked, not execve)
-    - cargo build --vcs none: ENOSYS — root cause TBD (possibly `pipe2` or `CLONE_THREAD`)
-    - cargo build with git: cargo new fails at git init (see git suite)
-  - Blocked by T8.3 (diagnostic + targeted fix)
-  - Note: SIGSYS log for execve may be stale (append mode, not truncated between runs)
+  - Evaluated: 4/4 via app UI. probe() used Command::status() (unreliable), changed to Path::exists()
+  - Refactored to run_sh_timed() with timing diagnostics and verbose stderr logging
+  - Verifies T8.3 (si_syscall=-1 suppression) and T8.4 (SIGSYS handlers for clone3/clone)
   - Key diagnostic: `cargo build -j1` — if passes, failure is thread-related; if fails, spawn-related
 
 - [ ] **T9.8** Suite: git (Git under proot)

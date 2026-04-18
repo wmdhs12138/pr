@@ -1,11 +1,7 @@
 use super::TestResult;
 
 pub fn probe() -> bool {
-    std::process::Command::new("/bin/sh")
-        .args(["-c", "cc --version >/dev/null 2>&1"])
-        .status()
-        .map(|o| o.success())
-        .unwrap_or(false)
+    std::path::Path::new("/usr/bin/cc").exists() || std::path::Path::new("/usr/bin/gcc").exists()
 }
 
 fn run_sh(cmd: &str) -> Result<std::process::Output, String> {
