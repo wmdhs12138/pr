@@ -12,7 +12,7 @@ use crate::color::*;
 use crate::plugin::load_plugins;
 use crate::shared::{
     get_download_cache_dir, get_installed_rootfs_dir,
-    get_native_busybox, get_native_proot, get_native_bash,
+    get_native_busybox, get_native_proot, get_native_bash, get_native_loader,
     get_plugins_dir, get_prefix, msg_error, msg_status, DEFAULT_FAKE_KERNEL_RELEASE,
     DEFAULT_FAKE_KERNEL_VERSION, DEFAULT_PRIMARY_NAMESERVER, DEFAULT_SECONDARY_NAMESERVER,
 };
@@ -469,23 +469,29 @@ fn write_config_files(rootfs: &str, distro_name: &str) -> Result<(), String> {
             msg_status("Running distribution-specific configuration steps...");
 
             let proot = get_native_proot();
-            let bash = get_native_bash();
             let rootfs_dir = rootfs.to_string();
             let setup_script = format!(
-                "run_proot_cmd() {{ \"$@\"; }} && source /etc/proot-distro/{}.sh && cd / && distro_setup",
+                "(. /etc/proot-distro/{}.sh 2>/dev/null; cd / && type distro_setup >/dev/null 2>&1 && distro_setup) >/dev/null 2>&1 || true",
                 distro_name
             );
+
+            let cache_dir = std::env::var("PROOT_TMP_DIR")
+                .or_else(|_| std::env::var("TMPDIR"))
+                .unwrap_or_else(|_| format!("{}/tmp", get_prefix()));
 
             let _ = Command::new(&proot)
                 .env("PROOT_NO_SECCOMP", "1")
                 .env("PROOT_L2S_DIR", format!("{}/.l2s", rootfs))
+                .env("PROOT_TMP_DIR", &cache_dir)
+                .env("TMPDIR", &cache_dir)
+                .env("PROOT_LOADER", get_native_loader())
                 .args([
                     "--link2symlink",
                     "-b",
-                    &format!("{}/etc/proot-distro:/etc/proot-distro", plugins_dir),
+                    &format!("{}:/etc/proot-distro", plugins_dir),
                     "-r",
                     &rootfs_dir,
-                    &bash,
+                    "/bin/sh",
                     "-c",
                     &setup_script,
                 ])
