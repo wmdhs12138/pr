@@ -848,17 +848,20 @@ src/proot-integration-test/
 
 - [x] **T9.2** Add `pr-cli test <distro>` subcommand + UI test button
   - `src/cmd_test.rs`: full orchestration — `pr-cli test <distro> [-s suite] [-v]`
-  - Four-stage pipeline:
+  - Three-stage pipeline:
     1. Install tools via proot+sh (apk add / apt install) — only if rustc not present
-    2. Deploy source files to `<rootfs>/tmp/pit-src/` (embedded via `include_str!`)
-    3. Build test binary with `rustc --edition 2021` inside proot
-    4. Run test binary, capture TAP output, parse and report results
-  - TAP parser: collects pass/fail/skip counts, lists failures
+    2. Deploy pre-compiled test binary (embedded via `include_bytes!` from
+       proot-integration-test target) to `{cache_dir}/pit`
+    3. Run binary per-suite inside proot, capture merged stdout+stderr (2>&1),
+       parse TAP output, report with checkmarks + diagnostics
+  - TAP parser: collects pass/fail/skip counts, prints all lines (ok/not ok with
+    ✓/✗, diagnostics like suite timing and [rust] traces as-is)
   - Auto-detects package manager (apk: sbin/apk, usr/sbin/apk, usr/bin/apk; apt: usr/bin/apt, usr/bin/apt-get)
-  - Android UI: added BugReport icon button on each installed distro row (between Play and Delete)
+  - Android UI: BugReport icon button on each installed distro row (Play → BugReport → Delete)
     in `MainActivity.kt`. Runs `pr-cli test <distro>` via `runDistroCommand`, output shown in
-    the existing output panel (same as install/remove).
-  - Verified: `cargo check --target aarch64-linux-android` passes, APK builds, button appears
+    the existing output panel with ANSI stripping. Sets PROOT_TMP_DIR + TMPDIR to app.cacheDir.
+  - Evaluated: single-suite (-s), verbose (-v), invalid suite, not-installed distro all work
+    correctly via both run-as and app UI
 
 - [x] **T9.3** Suite: distro setup (package manager + tool installation)
   - Detect package manager: `apk` (Alpine) or `apt` (Debian)
