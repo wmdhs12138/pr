@@ -914,13 +914,13 @@ src/proot-integration-test/
   - Environment variable inheritance through proot
   - Evaluated: 5/5 via both run-as and app UI. No code changes needed.
 
-- [ ] **T9.10** Suite: pipe (pipe/pipe2 syscall availability)
-  - Test `pipe()` works (baseline — used by GCC's `cc` driver)
-  - Test `pipe2(O_CLOEXEC)` works (required by rustc for subprocess stdout/stderr capture)
-  - Test `pipe2(O_NONBLOCK)` works
-  - If `pipe2` is blocked by seccomp, this explains rustc compile failure:
-    GCC uses `pipe()` without flags (allowed), rustc uses `pipe2(O_CLOEXEC)` (possibly blocked)
-  - This suite provides early signal before full rust toolchain diagnosis
+- [x] **T9.10** Suite: pipe (pipe/pipe2 syscall availability)
+  - Test `pipe()` baseline (used by GCC's cc driver)
+  - Test `pipe2(O_CLOEXEC)` (used by rustc for subprocess stdout/stderr capture)
+  - Test `pipe2(O_NONBLOCK)`
+  - Evaluated: 3/3 via both run-as and app UI. All pipe variants work inside proot.
+  - Disproves T8.3's original theory that pipe2 was blocked by seccomp — the actual
+    rustc failure root cause was si_syscall=-1 SIGSYS loop, not blocked pipe2.
 
 ## Phase 10 — Multi-Distro Support (Ubuntu 26.04 LTS, Debian)
 
