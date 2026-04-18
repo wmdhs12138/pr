@@ -43,6 +43,7 @@
 #include "tracee/seccomp.h"
 #include "tracee/statx.h"
 #include "path/path.h"
+#include "path/binding.h"
 #include "ptrace/ptrace.h"
 #include "ptrace/wait.h"
 #include "extension/extension.h"
@@ -396,7 +397,15 @@ void translate_syscall_exit(Tracee *tracee)
 		if (status < 0)
 			break;
 
-		if (status > 0 && strstr(referee, "/.l2s/") != NULL) {
+		if (status == 0 && referee[0] == '/') {
+			int sb = substitute_binding(tracee, HOST, referee);
+			if (sb > 0)
+				status = sb;
+			else if (sb < 0 && sb != -ENOENT)
+				break;
+		}
+
+		if (strstr(referee, "/.l2s/") != NULL) {
 			status = -EINVAL;
 			break;
 		}

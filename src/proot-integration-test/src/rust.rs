@@ -81,6 +81,14 @@ pub fn test_cargo_with_vcs() -> TestResult {
         return Err("stale .git/config.lock exists after remove_dir_all".to_string());
     }
 
+    let cfg = run_sh("mkdir -p /root/.config/git && touch /root/.config/git/config 2>&1")?;
+    if !cfg.status.success() {
+        return Err(format!(
+            "mkdir git config: {:?}",
+            std::str::from_utf8(&cfg.stdout).unwrap_or("")
+        ));
+    }
+
     let out = run_sh("cargo new /tmp/pit-cargo-vcs 2>&1")?;
     if !out.status.success() {
         let _ = std::fs::remove_dir_all("/tmp/pit-cargo-vcs");

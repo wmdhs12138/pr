@@ -11,6 +11,7 @@
 #include <time.h>      /* time(2), */
 #include <talloc.h>    /* talloc_*, */
 #include <fcntl.h>     /* AT_FDCWD, O_RDONLY, O_WRONLY, O_CREAT, O_TRUNC */
+#include <sched.h>     /* CLONE_*, */
 #include <limits.h>    /* PATH_MAX, */
 
 #include "extension/extension.h"
@@ -755,6 +756,73 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		break;
 
 	case PR_process_madvise:
+		set_result_after_seccomp(tracee, 0);
+		break;
+
+	case PR_execve:
+		restart_syscall_after_seccomp(tracee);
+		break;
+
+	case PR_execveat:
+	{
+		word_t dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+		if ((int)dirfd == AT_FDCWD) {
+			set_sysnum(tracee, PR_execve);
+			poke_reg(tracee, SYSARG_1, peek_reg(tracee, CURRENT, SYSARG_2));
+			poke_reg(tracee, SYSARG_2, peek_reg(tracee, CURRENT, SYSARG_3));
+			poke_reg(tracee, SYSARG_3, peek_reg(tracee, CURRENT, SYSARG_4));
+		}
+		restart_syscall_after_seccomp(tracee);
+		break;
+	}
+
+	case PR_brk:
+		restart_syscall_after_seccomp(tracee);
+		break;
+
+	case PR_clone3:
+	{
+		word_t args_ptr = peek_reg(tracee, ORIGINAL, SYSARG_1);
+		word_t flags = peek_word(tracee, args_ptr);
+		if (flags & CLONE_THREAD) {
+			set_result_after_seccomp(tracee, -ENOSYS);
+			break;
+		}
+		flags &= ~(word_t)(CLONE_VM | CLONE_VFORK);
+		word_t child_tid = peek_word(tracee, args_ptr + 16);
+		word_t parent_tid = peek_word(tracee, args_ptr + 24);
+		word_t exit_signal = peek_word(tracee, args_ptr + 32);
+		word_t stack = peek_word(tracee, args_ptr + 40);
+		word_t tls = peek_word(tracee, args_ptr + 56);
+		set_sysnum(tracee, PR_clone);
+		poke_reg(tracee, SYSARG_1, flags | exit_signal);
+		poke_reg(tracee, SYSARG_2, stack);
+		poke_reg(tracee, SYSARG_3, parent_tid);
+		poke_reg(tracee, SYSARG_4, child_tid);
+		poke_reg(tracee, SYSARG_5, tls);
+		restart_syscall_after_seccomp(tracee);
+		break;
+	}
+
+	case PR_clone:
+	{
+		word_t flags = peek_reg(tracee, ORIGINAL, SYSARG_1);
+		if (flags & CLONE_THREAD) {
+			set_result_after_seccomp(tracee, -ENOSYS);
+			break;
+		}
+		flags &= ~(word_t)(CLONE_VM | CLONE_VFORK);
+		poke_reg(tracee, SYSARG_1, flags);
+		restart_syscall_after_seccomp(tracee);
+		break;
+	}
+
+	case PR_setuid:
+	case PR_setgid:
+	case PR_setreuid:
+	case PR_setregid:
+	case PR_setfsuid:
+	case PR_setfsgid:
 		set_result_after_seccomp(tracee, 0);
 		break;
 

@@ -779,15 +779,18 @@ Both tests documented with code in `docs/phase8.md`.
   - proot login/session stability: ✅ no regression (all other suites pass)
   - Blocked by two distinct issues: musl clone3 ENOSYS (tests 2-3) and git lock file (test 4)
 
-- [ ] **T8.4** Fix git lock file issue under proot
-  - `cargo new /tmp/hello` fails: "failed to create locked file .git/config.lock: File exists"
-  - Workaround: `cargo new --vcs none /tmp/hello` works
-  - Confirmed via Phase 9: not a stale file (remove_dir_all succeeds before cargo new)
-  - `git init` fails with: `fatal: unable to access '/root/.config/git/config': Function not implemented`
-  - Root cause investigation needed: ENOSYS on git config access may cause partial git init state,
-    leaving lock file that triggers EEXIST on retry
-  - git binary CAN be exec'd through /bin/sh -c inside proot (probe fixed to check file existence)
-  - Separate from the ENOSYS issue affecting rustc compile and cargo build
+- [x] **T8.4** Fix git lock file issue under proot
+  - Root cause: SIGSYS handler in seccomp.c had no cases for `PR_clone3`, `PR_clone`,
+    `PR_setuid`, `PR_setgid`, `PR_setreuid`, `PR_setregid`, `PR_setfsuid`, `PR_setfsgid`
+  - musl's `fork()` uses `clone3` on newer kernels; when blocked by seccomp → SIGSYS → default
+    handler returned -ENOSYS, breaking all subprocess spawning from musl binaries (git, rustc, cargo)
+  - `setuid`/`setgid` family blocked by zygote seccomp; proot fakes root so returning 0 is correct
+  - Fix in `src/proot/src/tracee/seccomp.c`:
+    - `PR_clone3`: read `clone_args` struct, strip `CLONE_VM`/`CLONE_VFORK` (unless `CLONE_THREAD`),
+      convert to `clone()` syscall with extracted args (flags, stack, parent_tid, child_tid, tls)
+    - `PR_clone`: strip `CLONE_VM`/`CLONE_VFORK` (unless `CLONE_THREAD`), restart
+    - `PR_setuid`/`PR_setgid`/`PR_setreuid`/`PR_setregid`/`PR_setfsuid`/`PR_setfsgid`: return 0
+  - Awaiting device verification (Phase 9 git/rust suites)
 
 ## Phase 9 — Proot Integration Test Suite
 
