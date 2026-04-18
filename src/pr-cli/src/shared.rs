@@ -98,7 +98,7 @@ pub fn build_proot_args(
     let prefix = get_prefix();
     let cache_dir = std::env::var("PROOT_TMP_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
-        .unwrap_or_else(|_| "/tmp".to_string());
+        .unwrap_or_else(|_| format!("{}/tmp", prefix));
 
     let l2s_dir = format!("{}/.l2s", rootfs);
     if Path::new(&l2s_dir).is_dir() {
@@ -241,7 +241,7 @@ pub fn build_proot_args(
 pub fn build_proot_runtime_env() -> Vec<(&'static str, String)> {
     let cache_dir = std::env::var("PROOT_TMP_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
-        .unwrap_or_else(|_| "/tmp".to_string());
+        .unwrap_or_else(|_| format!("{}/tmp", get_prefix()));
 
     vec![
         ("PROOT_NO_SECCOMP", "1".to_string()),

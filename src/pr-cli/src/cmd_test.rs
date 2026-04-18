@@ -84,6 +84,9 @@ fn parse_tap(tap_output: &str) -> TapResult {
     };
 
     for line in tap_output.lines() {
+        if line.is_empty() {
+            continue;
+        }
         if line.starts_with("ok ") {
             if line.contains("# SKIP") {
                 result.skipped += 1;
@@ -114,6 +117,8 @@ fn parse_tap(tap_output: &str) -> TapResult {
                 .unwrap_or_default();
             result.failures.push(name.clone());
             println!("  {} {}", "\x1b[31m✗\x1b[0m", name);
+        } else {
+            println!("    {}", line);
         }
     }
 
@@ -240,7 +245,7 @@ pub fn command_test(distro: &str, suite: Option<&str>, verbose: bool) -> Result<
     }
 
     let suites = [
-        "distro", "clone", "readlink", "gcc", "rust", "git", "general",
+        "distro", "clone", "readlink", "gcc", "rust", "git", "pipe", "general",
     ];
     let target_suites: Vec<&str> = match suite {
         Some(s) => {
@@ -272,7 +277,7 @@ pub fn command_test(distro: &str, suite: Option<&str>, verbose: bool) -> Result<
 
     let cache_dir = std::env::var("PROOT_TMP_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
-        .unwrap_or_else(|_| "/tmp".to_string());
+        .unwrap_or_else(|_| format!("{}/tmp", get_prefix()));
 
     msg_status("Deploying test binary...");
     deploy_binary(&cache_dir)?;
