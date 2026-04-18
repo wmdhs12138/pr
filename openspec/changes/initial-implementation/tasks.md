@@ -769,17 +769,28 @@ Both tests documented with code in `docs/phase8.md`.
     COMPILER_PATH/LIBRARY_PATH workarounds
   - See `docs/phase8.md` for full analysis
 
-- [ ] **T8.3** Test full Rust toolchain after T8.1 fix
-  - Phase 9 rust suite (4 tests) provides automated regression testing:
-    - `rustc -vV` ✅ pass (no subprocess needed)
-    - `rustc compile .rs` ❌ ENOSYS: rustc (musl) cannot exec linker `cc` inside proot
-    - `cargo build --vcs none` ❌ ENOSYS: cargo (musl) cannot exec `rustc` inside proot
-    - `cargo build with git` ❌ lock file: `cargo new` fails at git config.lock (separate from ENOSYS)
-  - C/C++ compilation: ✅ no regression (gcc suite 3/3 pass)
-  - proot login/session stability: ✅ no regression (all other suites pass)
-  - Blocked by two distinct issues: musl clone3 ENOSYS (tests 2-3) and git lock file (test 4)
+- [ ] **T8.3** Diagnose and fix remaining rust/git test failures
+  - Current state: 27/29 tests pass. 4 tests fail: rustc compile, cargo build (x2), git init
+  - SIGSYS log shows 15 execve entries but log is append-mode (may be stale)
+  - Root cause may NOT be execve — see `docs/t8_3_t8_4_problem_plans.md` for full analysis
+  - Leading theory: SIGSYS log is stale; actual failures likely caused by different syscalls
+    - git init: likely a filesystem syscall (linkat, utimensat), not execve
+    - rustc compile: likely `pipe2(O_CLOEXEC)` blocked by seccomp (GCC uses `pipe()`, rustc uses `pipe2()`)
+    - cargo build: likely `CLONE_THREAD` → -ENOSYS (cargo uses threads for parallel compilation)
+  - Step 1: Enhanced SIGSYS logging (PID, timestamp, truncate at startup in seccomp.c)
+  - Step 2: On-device diagnostics before any code changes:
+    a. `GIT_TRACE=1 git init /tmp/test` → determine if subprocess or filesystem syscall issue
+    b. `cargo build -j1` → determine if thread-related or spawn-related failure
+    c. pipe2 availability check → determine if pipe2 is blocked by seccomp
+  - Step 3: Clean test run with truncated SIGSYS log, analyze results
+  - Step 4: Targeted fix based on Step 2-3 diagnostics:
+    - If execve blocked → Plan B (execve → execveat workaround, see plans doc §Plan B)
+    - If pipe2 blocked → add `PR_pipe2` SIGSYS handler
+    - If git filesystem syscall → add specific handler (linkat, utimensat, etc.)
+    - If thread-related → cargo -j1 test gating or CLONE_THREAD alternative
+  - Regression gate: all 27 currently passing tests must still pass after any change
 
-- [x] **T8.4** Fix git lock file issue under proot
+- [x] **T8.4** Add SIGSYS handlers for clone3, clone, setuid/setgid family
   - Root cause: SIGSYS handler in seccomp.c had no cases for `PR_clone3`, `PR_clone`,
     `PR_setuid`, `PR_setgid`, `PR_setreuid`, `PR_setregid`, `PR_setfsuid`, `PR_setfsgid`
   - musl's `fork()` uses `clone3` on newer kernels; when blocked by seccomp → SIGSYS → default
@@ -790,7 +801,8 @@ Both tests documented with code in `docs/phase8.md`.
       convert to `clone()` syscall with extracted args (flags, stack, parent_tid, child_tid, tls)
     - `PR_clone`: strip `CLONE_VM`/`CLONE_VFORK` (unless `CLONE_THREAD`), restart
     - `PR_setuid`/`PR_setgid`/`PR_setreuid`/`PR_setregid`/`PR_setfsuid`/`PR_setfsgid`: return 0
-  - Awaiting device verification (Phase 9 git/rust suites)
+  - Result: git config now passes (1/3 git suite). git init and rustc compile still fail.
+  - Remaining failures tracked in T8.3 (likely different root cause — see plans doc)
 
 ## Phase 9 — Proot Integration Test Suite
 
@@ -874,19 +886,22 @@ src/proot-integration-test/
 - [ ] **T9.7** Suite: rust (Rust toolchain)
   - 4 tests: rustc -vV, rustc compile .rs, cargo build --vcs none, cargo build with git
   - Verified on device: 1/4 passed (rustc -vV), 3 failed:
-    - rustc compile: ENOSYS (musl rustc can't exec linker cc)
-    - cargo build --vcs none: ENOSYS (cargo can't exec rustc)
-    - cargo build with git: git config.lock file exists (T8.4)
-  - Blocked by T8.4 (git lock file) and musl clone3 ENOSYS inside proot
+    - rustc compile: ENOSYS — root cause TBD (possibly `pipe2` blocked, not execve)
+    - cargo build --vcs none: ENOSYS — root cause TBD (possibly `pipe2` or `CLONE_THREAD`)
+    - cargo build with git: cargo new fails at git init (see git suite)
+  - Blocked by T8.3 (diagnostic + targeted fix)
+  - Note: SIGSYS log for execve may be stale (append mode, not truncated between runs)
+  - Key diagnostic: `cargo build -j1` — if passes, failure is thread-related; if fails, spawn-related
 
 - [ ] **T9.8** Suite: git (Git under proot)
   - 3 tests: git init, git config, cargo new with vcs git
-  - Probe fixed: checks `/usr/bin/git` existence instead of exec (git binary CAN be exec'd through /bin/sh -c)
-  - Verified on device: 0/3 passed, 0/3 skipped
-    - git init: ENOSYS accessing /root/.config/git/config
-    - git config: ENOSYS accessing /root/.config/git/config
-    - cargo new with vcs git: config.lock file exists (T8.4)
-  - Blocked by T8.4
+  - Probe: checks `/usr/bin/git` existence
+  - Verified on device: 1/3 passed (git config — fixed by T8.4 setuid/setgid handlers)
+    - git init: fails — root cause TBD (may be filesystem syscall, not execve)
+    - cargo new with vcs git: fails (depends on git init)
+  - Blocked by T8.3 (diagnostic + targeted fix)
+  - Key diagnostic: `GIT_TRACE=1 git init /tmp/test 2>&1` — if no subprocess spawn
+    but init still fails, the failure is a filesystem syscall (linkat, utimensat, etc.)
 
 - [ ] **T9.9** Suite: general (proot stability)
   - File I/O roundtrip: create, write, read, chmod, rename, delete in `/tmp`
@@ -895,6 +910,128 @@ src/proot-integration-test/
   - Signal propagation: SIGINT reaches child process
   - Environment variable inheritance through proot
   - Verified on device: 5/5 passed on Alpine
+
+- [ ] **T9.10** Suite: pipe (pipe/pipe2 syscall availability)
+  - Test `pipe()` works (baseline — used by GCC's `cc` driver)
+  - Test `pipe2(O_CLOEXEC)` works (required by rustc for subprocess stdout/stderr capture)
+  - Test `pipe2(O_NONBLOCK)` works
+  - If `pipe2` is blocked by seccomp, this explains rustc compile failure:
+    GCC uses `pipe()` without flags (allowed), rustc uses `pipe2(O_CLOEXEC)` (possibly blocked)
+  - This suite provides early signal before full rust toolchain diagnosis
+
+## Phase 10 — Multi-Distro Support (Ubuntu 26.04 LTS, Debian)
+
+Extend pr from Alpine-only to supporting glibc-based distros. The Rust code (pr-cli)
+is already multi-distro: plugin parser handles any `.sh`, install runs `distro_setup()`
+generically, test framework detects `apk` vs `apt`. The work is plugin configuration,
+rootfs hosting, on-device testing, and fixing glibc-specific issues.
+
+Ubuntu 26.04 LTS (Resolute Raccoon) releases late April 2026. Rootfs tarballs will be
+hosted on the project's GitHub Releases page instead of easycli.sh.
+
+### Architecture
+
+- **Plugin `.sh` files** remain shell — they run inside proot to execute guest commands
+  (`dpkg-reconfigure`, `add-apt-repository`) that MUST be shell because they need the
+  guest's package manager and locale tools
+- **pr-cli Rust code** is already distro-agnostic — no code changes needed for basic
+  install/login/test flows
+- **Rootfs tarballs** hosted on GitHub Releases (`github.com/oonid/pr/releases`)
+  - Alpine: built from official Alpine minirootfs (already working)
+  - Ubuntu 26.04 LTS: built from `debootstrap --variant=minbase` after release day
+  - Debian trixie: built from `debootstrap --variant=minbase`
+  - Naming convention: `<distro>_<version>_<arch>_rootfs.tar.xz`
+- **glibc differences** from Alpine (musl): larger rootfs (~55MB vs ~3MB), locale
+  generation required, NSS resolver, glibc's clone3 usage, PAM configuration
+
+### Tasks
+
+- [ ] **T10.1** Rootfs build pipeline for Ubuntu 26.04 LTS
+  - Write `scripts/build-rootfs-ubuntu.sh` — builds minimal rootfs tarball
+  - Uses `debootstrap --variant=minbase --arch=arm64 questing` on a Linux host
+  - Or cross-build via `qemu-debootstrap` if building on non-arm64 host
+  - Strip unnecessary files (docs, man, cache) to minimize tarball size
+  - Output: `ubuntu_26.04_aarch64_rootfs.tar.xz`
+  - Compute SHA256, upload to GitHub Release as `rootfs-ubuntu-26.04`
+  - Also build for x86_64 (for emulator testing) and arm (for older devices)
+  - Blocked until Ubuntu 26.04 LTS release day (late April 2026)
+
+- [ ] **T10.2** Rootfs build pipeline for Debian trixie
+  - Write `scripts/build-rootfs-debian.sh` — same approach as Ubuntu
+  - `debootstrap --variant=minbase --arch=arm64 trixie`
+  - Output: `debian_trixie_aarch64_rootfs.tar.xz`
+  - Can be done immediately (trixie is available now)
+  - Upload to GitHub Release as `rootfs-debian-trixie`
+
+- [ ] **T10.3** Create Ubuntu LTS plugin (`src/scripts/plugins/ubuntu-lts.sh`)
+  - `DISTRO_NAME="Ubuntu"`, `DISTRO_COMMENT="26.04 LTS (Resolute Raccoon)"`
+  - `TARBALL_URL_aarch64` → GitHub Release URL for ubuntu_26.04_aarch64_rootfs.tar.xz
+  - `TARBALL_SHA256_aarch64` → SHA256 from build pipeline
+  - Also add `arm` and `x86_64` tarballs if building for those archs
+  - `distro_setup()`: locale configuration only (sed locale.gen + dpkg-reconfigure locales)
+  - Skip Mozilla PPA (not needed for headless proot usage)
+  - Blocked by T10.1 (need built tarball + SHA256)
+
+- [ ] **T10.4** Update Debian plugin (`src/scripts/plugins/debian.sh`)
+  - Update `TARBALL_URL_*` to point to GitHub Releases instead of easycli.sh
+  - Update SHA256 values from build pipeline output
+  - `distro_setup()` unchanged (locale config only)
+  - Blocked by T10.2
+
+- [ ] **T10.5** Update Alpine plugin to GitHub Releases
+  - Move `TARBALL_URL_*` from easycli.sh to GitHub Releases
+  - Can continue using easycli.sh tarballs (download + re-upload) or build from
+    Alpine minirootfs directly via `scripts/build-rootfs-alpine.sh`
+  - Ensures all distros use the same hosting infrastructure
+  - Update SHA256 values accordingly
+
+- [ ] **T10.6** Test Ubuntu install on device
+  - Force-stop app, install ubuntu-lts from app UI
+  - Verify download (~55MB), SHA256, extraction succeed
+  - Verify `distro_setup()` executes (locale generation)
+  - Verify login works (`/bin/sh -l` in Ubuntu rootfs)
+  - Verify `apt-get update` works inside proot
+  - Blocked by T10.3
+
+- [ ] **T10.7** Test Ubuntu integration suite on device
+  - `pr-cli test ubuntu-lts` — verify distro suite detects `apt`, installs tools
+  - Verify gcc/rustc/cargo/git can be installed via apt
+  - Run clone, readlink, gcc, rust, git, pipe, general suites
+  - Document which tests pass/fail/skip vs Alpine baseline
+  - Blocked by T10.6
+
+- [ ] **T10.8** Test Debian install and integration on device
+  - Install debian from app UI
+  - Verify `distro_setup()`, login, `apt-get update`
+  - Run integration test suite, document results vs Alpine/Ubuntu
+  - Blocked by T10.4
+
+- [ ] **T10.9** Handle glibc-specific issues discovered during testing
+  - glibc's `clone3` usage — proot SIGSYS handler already converts to `clone` (T8.4)
+  - NSS resolver (`/etc/nsswitch.conf`) — may need `libnss_files.so` in rootfs
+  - Dynamic linker path (`/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1`) — verify
+    proot's execve translation handles multi-arch lib paths
+  - PAM configuration — `distro_setup()` handles locale; may need `pam_env.so` fix
+    for `/etc/environment` to be read on login (like vendor plugins do for Arch/Fedora)
+  - Larger rootfs extraction time — verify progress reporting works for ~55MB tarballs
+  - This task is a catch-all for issues found in T10.6/T10.7/T10.8
+
+- [ ] **T10.10** Update app UI for multi-distro
+  - Verify distro list shows all available plugins (alpine, debian, ubuntu-lts, etc.)
+  - Each distro row should show install/login/test buttons independently
+  - Verify no hardcoded Alpine assumptions in UI code
+
+- [ ] **T10.11** Update integration test framework for multi-distro
+  - Verify `detect_package_manager()` correctly identifies `apt` in Ubuntu/Debian
+  - Verify `install_tools()` uses correct apt commands
+  - Verify test binary (musl-static) runs correctly in glibc rootfs
+  - Consider adding distro-specific test probes if needed
+
+- [ ] **T10.12** Document multi-distro support
+  - Update AGENTS.md with multi-distro testing instructions
+  - Document known differences between musl (Alpine) and glibc (Ubuntu/Debian) in proot
+  - Document rootfs build pipeline (how to build, upload, update plugins)
+  - Document how to add new distro plugins
 
 ## Phase 11 — Polish & Documentation
 
