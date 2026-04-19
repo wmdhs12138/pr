@@ -1,10 +1,12 @@
 # Important Notes
 
 See also:
-- `docs/phase8.md` — Phase 8: Rust toolchain support (vfork/CLONE_VM fix, link2symlink readlink fix)
+- `docs/phase8-rust-support.md` — Phase 8: Rust toolchain support (vfork/CLONE_VM fix, link2symlink readlink fix)
 - `docs/phase7-targetSdk35.md` — Phase 7: targetSdk 35 compatibility (SELinux W^X bypass, seccomp analysis)
-- `docs/phase6-proot-distro-rust-port.md` — Phase 6: Replace proot-distro.sh with Rust binary (exploration, viability tests, recommendation)
+- `docs/phase6-proot-distro-rust-port.md` — Phase 6: Replace proot-distro.sh with Rust binary
 - `docs/phase5-alpine.md` — Phase 5: Alpine Linux investigation and fixes
+- `docs/phase9-integration-tests.md` — Phase 9: Integration test suite (37/37 pass)
+- `docs/proot-improvement.md` — Our proot fork vs vendor/proot and vendor/termux-proot
 
 ---
 
@@ -50,10 +52,9 @@ Tested on device:
 | targetSdk | proot login | Notes |
 |-----------|-------------|-------|
 | 28 | **WORKS** | No W^X enforcement. Proot can execve, chmod, chdir freely. |
-| 29 | **FAILS** | W^X + seccomp enforced. All three blockers appear. |
-| 35 | **FAILS** | Same as 29+. |
+| 29+ | **WORKS** | Uses PROOT_LOADER mechanism (Phase 7) to bypass W^X. Requires unbundled loader binary in nativeLibraryDir. |
 
-**Conclusion**: targetSdk 28 is the maximum for proot to function. This matches Termux's approach (they also use targetSdk 28).
+**Conclusion**: targetSdk 35 works via the PROOT_LOADER mechanism. The loader (`libproot-loader.so`) lives in nativeLibraryDir where SELinux allows execve, and proot uses it to exec guest binaries without hitting W^X.
 
 ### nativeLibraryDir is the Exception
 
@@ -86,11 +87,11 @@ The forkPty() JNI function forks the app process. The child inherits `untrusted_
 
 2. **Guest dynamic linker as proxy**: Copy `ld-musl-aarch64.so.1` into nativeLibraryDir. Proot rewrites execve to go through the linker. Unlikely to work because the linker needs a full Linux ABI.
 
-3. **Lower targetSdk to 28**: Current working solution. Same as Termux. May limit Play Store distribution.
+3. **targetSdk 35 with PROOT_LOADER**: Current working solution. The unbundled loader binary in nativeLibraryDir handles execve for guest binaries. Play Store compatible.
 
-### Zygote Seccomp Filter (targetSdk 28, aarch64)
+### Zygote Seccomp Filter (targetSdk 35, aarch64)
 
-Even at targetSdk=28, the Android zygote installs a BPF seccomp filter on the app process
+Even at targetSdk=35, the Android zygote installs a BPF seccomp filter on the app process
 (`Seccomp: 2, Seccomp_filters: 1`). This filter persists even with `PROOT_NO_SECCOMP=1`
 (which only disables proot's own seccomp filter, not the zygote's).
 
@@ -104,9 +105,15 @@ Even at targetSdk=28, the Android zygote installs a BPF seccomp filter on the ap
 | `linkat` | 37 | `PR_linkat` | Try `renameat()`, fallback to copy+delete on EXDEV/EACCES |
 | `renameat2` | 276 | `PR_renameat2` | Downgrade to `renameat` (drop flags) and restart |
 | `faccessat2` | 439 | `PR_faccessat2` | Downgrade to `faccessat` (drop flags) and restart |
+| `faccessat` | 48 | `PR_faccessat` | Return 0 (noop) |
+| `openat2` | 437 | `PR_openat2` | Downgrade to `openat` (clear size arg) and restart |
 | `process_madvise` | 440 | `PR_process_madvise` | Return 0 (noop — advisory) |
-| `setgid` | 144 | default | Return -ENOSYS (harmless) |
-| `setuid` | 146 | default | Return -ENOSYS (harmless) |
+| `fchmodat` | 53 | `PR_fchmodat` | Return 0 (noop) |
+| `clone3` | 435 | `PR_clone3` | Convert args to clone, strip CLONE_VM/CLONE_VFORK |
+| `clone` | 220 | `PR_clone` | Strip CLONE_VM/CLONE_VFORK |
+| `setuid` | 146 | `PR_setuid` | Return 0 (noop — fake_id0 handles semantics) |
+| `setgid` | 144 | `PR_setgid` | Return 0 (noop) |
+| `setreuid`/`setregid`/`setfsuid`/`setfsgid` | various | respective | Return 0 (noop) |
 | `memfd_create` | 279 | default | Return -ENOSYS |
 | `openat` | 56 | default | Return **-ENOENT** (not -ENOSYS) |
 | `fstatat64` | 79 | default | Return **-ENOENT** (not -ENOSYS) |
@@ -125,17 +132,20 @@ ENOENT as "continue searching" but ENOSYS as "abort all search". Without this fi
 failed openat on a non-existent path would prevent the dynamic linker from finding the real
 library.
 
-**Verified working** (on fresh Alpine install, app process with seccomp: 2):
-- `apk update`, `apk add vim`, `apk add curl`, `apk add openssh` — all 0 errors
-- `vim --version`, `curl --version`, `ssh -V` — all pass
+**Verified working** (app process with seccomp: 2):
+- Alpine: `apk update`, `apk add vim gcc rust cargo git openssh` — all 0 errors
+- Debian: `apt update && apt install vim gcc rustc cargo git` — all 0 errors
+- Full test suite: **37/37 pass** on both Alpine and Debian
 
 ### Key Files
 
-- `android/app/build.gradle.kts` — `targetSdk = 28` (MUST NOT exceed 28 for proot to work)
-- `src/proot/src/tracee/event.c` — seccomp patch (line 95: skip proot's own seccomp filter)
-- `src/proot/src/tracee/seccomp.c` — proot's seccomp handler (12 SIGSYS handlers, x0 clobber fix, ENOENT for openat/fstatat64)
-- `src/pr-cli/src/login.rs` — proot invocation with PROOT_TMP_DIR, arg0("proot"), nativeLibraryDir paths
+- `android/app/build.gradle.kts` — `targetSdk = 35` (works via PROOT_LOADER mechanism)
+- `src/proot/src/tracee/event.c` — seccomp patch (skip proot's own seccomp filter)
+- `src/proot/src/tracee/seccomp.c` — SIGSYS handlers (18 handlers, x0 clobber fix, ENOENT for openat/fstatat64)
+- `src/pr-cli/src/login.rs` — proot invocation with PROOT_LOADER, PROOT_TMP_DIR, arg0("proot"), nativeLibraryDir paths
+- `src/pr-cli/src/shared.rs` — `build_proot_args()` with `--change-id=0:0`, `--kernel-release`, bind mounts
 - `docs/phase5-alpine.md` — Alpine-specific investigation and seccomp findings
+- `docs/proot-improvement.md` — Full comparison of our proot vs vendor versions
 
 ---
 

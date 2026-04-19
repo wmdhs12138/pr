@@ -37,7 +37,7 @@ src/scripts/                # Shell scripts: bootstrap.sh, plugins/
 android/                    # Android APK (Kotlin + Compose + JNI)
 scripts/                    # Host-side build scripts (build.sh, download-*.sh)
 vendor/                     # Git submodules — READ ONLY, never modify
-docs/                       # Phase documentation, important-notes.md
+docs/                       # Phase documentation, proot-improvement.md
 openspec/                   # Change management (proposal, design, tasks)
 build/                      # Build artifacts (gitignored)
 ```
@@ -98,12 +98,12 @@ cp -f src/pr-cli/target/aarch64-linux-android/release/pr-cli \
 md5sum src/pr-cli/target/aarch64-linux-android/release/pr-cli \
        android/app/src/main/jniLibs/arm64-v8a/libpr-cli.so
 # 4. Build APK
-cd android && ./gradlew assembleDebug
+cd android && rm -rf app/build && ./gradlew assembleDebug
 # 5. Install
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-**IMPORTANT:** Gradle caches jniLibs — always verify the copy succeeded with `md5sum` before building the APK.
+**IMPORTANT:** Gradle caches jniLibs — always verify the copy succeeded with `md5sum` and clean `app/build` before building the APK.
 
 ## Testing
 
@@ -120,14 +120,16 @@ Run from app UI via BugReport button on each distro row, or:
 
 ```bash
 adb shell run-as id.or.oo.pr files/usr/bin/pr-cli test alpine
+adb shell run-as id.or.oo.pr files/usr/bin/pr-cli test debian
 ```
 
-**Test suites:** distro (8), clone (5), readlink (6), gcc (3), rust (3), git (3), general (5)
+**Test suites:** distro (8), clone (5), readlink (6), gcc (3), rust (4), git (3), pipe (3), general (5)
 
-### Known test failures
+**Results:** 37/37 pass on Alpine and Debian. Rust suite 4/4 on Debian (rustc compile + cargo build work).
 
-- **rust suite**: 1/3 pass (rustc -vV works). rustc compile and cargo build fail with ENOSYS — blocked by T8.4 (clone3 syscall blocked by Android seccomp)
-- **git suite**: 3/3 skipped. git binary cannot be exec'd from bionic test binary inside proot
+### Known test failures (Alpine-specific)
+
+- **rust suite on Alpine**: 1/4 pass (rustc -vV works). rustc compile and cargo build fail with "linker `cc` not found" — `apk add gcc` installs gcc but the `cc` symlink is not found via PATH inside proot. Not a proot bug; Debian's gcc package creates `/usr/bin/cc` correctly.
 
 ## Code Conventions
 
@@ -143,7 +145,7 @@ All modifications go in `src/proot/` (working copy), never in `vendor/`.
 
 ### Native library disguise
 
-All native binaries (proot, busybox, bash, pr-cli) are named `lib*.so` in jniLibs/ so Android extracts them to nativeLibraryDir where SELinux allows execve. They are standalone ELF executables.
+All native binaries (proot, loader, busybox, bash, pr-cli) are named `lib*.so` in jniLibs/ so Android extracts them to nativeLibraryDir where SELinux allows execve. They are standalone ELF executables, not shared libraries.
 
 ### Environment variable contract
 
@@ -155,7 +157,7 @@ All native binaries (proot, busybox, bash, pr-cli) are named `lib*.so` in jniLib
 
 ### Shell commands inside proot
 
-The test binary is bionic (Android). It cannot directly exec dynamic Alpine (musl) binaries inside proot — gets ENOSYS. **ALL commands that exec distro binaries must go through `/bin/sh -c`:**
+The test binary is bionic (Android). It cannot directly exec dynamic distro (musl/glibc) binaries inside proot — gets ENOSYS. **ALL commands that exec distro binaries must go through `/bin/sh -c`:**
 
 ```rust
 // BROKEN — ENOSYS:
@@ -168,7 +170,7 @@ Command::new("/bin/sh").args(["-c", "apk update 2>&1"]).output()
 ### Commit style
 
 Format: `<task-id>: <description>`
-Examples: `T9.6: mark gcc suite complete`, `T8.2: fix GCC prefix resolution`
+Examples: `T5.3: fix fake root and kernel-release for Debian — 37/37 ALL PASS`
 Task IDs reference `openspec/changes/initial-implementation/tasks.md`.
 
 ### Code style
@@ -179,20 +181,25 @@ Task IDs reference `openspec/changes/initial-implementation/tasks.md`.
 
 ## Critical Constraints
 
-1. **targetSdk MUST be 35** — Play Store minimum. Already works via PROOT_LOADER mechanism.
-2. **W^X / SELinux** — Only nativeLibraryDir allows execve. Files in app data cannot be exec'd.
-3. **Zygote seccomp** blocks 12+ syscalls. proot has SIGSYS handlers — never remove them.
+1. **targetSdk is 35** — Play Store minimum. Works via PROOT_LOADER mechanism (unbundled loader binary in nativeLibraryDir).
+2. **W^X / SELinux** — Only nativeLibraryDir allows execve. Files in app data cannot be exec'd. The PROOT_LOADER mechanism works around this.
+3. **Zygote seccomp** blocks 18+ syscalls. Proot has SIGSYS handlers — never remove them. See `docs/important-notes.md` for full list.
 4. **bootstrap.sh must be POSIX sh** — runs before bash is available.
 5. **ARM64 x0 clobber bug** — register x0 may be clobbered by kernel before proot reads it at SIGSYS time. All handlers use ORIGINAL register version.
 6. **TLS alignment** — proot needs 64-byte PT_TLS alignment for Bionic. Build script patches this.
+7. **Fake root required** — `--change-id=0:0` (proot `-0`) must always be passed. dpkg and other tools check `getuid() == 0`.
+8. **Kernel release format** — `--kernel-release` takes ONLY the release string (e.g. `6.17.0-pr`), NOT the full `uname` output. The libc6 preinst script parses this with shell arithmetic.
 
 ## OpenSpec Workflow
 
-Tasks tracked in `openspec/changes/initial-implementation/tasks.md` with IDs like T1.1, T9.5.
+Tasks tracked in `openspec/changes/initial-implementation/tasks.md` with IDs like T5.3, T9.5.
 Use OpenSpec skills for proposing changes, implementing tasks, and archiving.
 
 ## Key References
 
-- `docs/important-notes.md` — Critical constraints, read first
-- `docs/phase8.md` — vfork/CLONE_VM fix, link2symlink readlink fix
-- `openspec/changes/initial-implementation/tasks.md` — Full task tracking (~900 lines)
+- `docs/important-notes.md` — Critical constraints, seccomp handlers, read first
+- `docs/proot-improvement.md` — Our proot fork vs vendor/proot and vendor/termux-proot
+- `docs/phase8-rust-support.md` — vfork/CLONE_VM fix, link2symlink readlink fix
+- `docs/phase9-integration-tests.md` — Integration test suite (37/37 pass)
+- `docs/phase7-targetSdk35.md` — targetSdk 35 compatibility (PROOT_LOADER mechanism)
+- `openspec/changes/initial-implementation/tasks.md` — Full task tracking (~1100 lines)

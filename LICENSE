@@ -1,0 +1,67 @@
+pr — Multi-License
+==================
+
+This project uses different licenses for different components.
+
+Component License Map
+---------------------
+
+  src/proot/                    GPL-2.0-or-later  (derivative of proot/termux-proot)
+  src/scripts/plugins/          GPL-3.0-or-later  (derivative of termux-proot-distro)
+  src/pr-cli/                   MIT
+  src/proot-integration-test/   MIT
+  android/                      MIT
+  src/scripts/bootstrap.sh      MIT
+  scripts/                      MIT
+  docs/                         MIT
+
+Vendor submodules (READ ONLY, not modified):
+  vendor/proot/                 GPL-2.0
+  vendor/termux-proot/          GPL-2.0
+  vendor/termux-proot-distro/   GPL-3.0
+  vendor/busybox/               GPL-2.0
+  vendor/samba/                 GPL-3.0
+  vendor/musl/                  MIT
+  vendor/bionic/                BSD (AOSP)
+  vendor/termlib/               Apache-2.0
+
+Full license texts are in the vendor subdirectories.
+
+GPL-2.0-or-later
+-----------------
+
+This license applies to src/proot/ (derivative work of proot v5.4.0 by
+STMicroelectronics / Cédric Vincent, and termux-proot by Termux contributors).
+
+Full text: vendor/proot/COPYING
+
+GPL-3.0-or-later
+-----------------
+
+This license applies to src/scripts/plugins/ (derivative work of termux-proot-distro
+by Termux contributors).
+
+Full text: vendor/termux-proot-distro/LICENSE
+
+MIT License
+-----------
+
+Copyright (c) 2026 pr contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

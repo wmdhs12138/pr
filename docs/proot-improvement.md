@@ -35,6 +35,10 @@ all syscall translation.
 | `path/f2fs-bug.h` | F2FS bug declarations |
 | `tls-align.c` | Forces 64-byte TLS alignment for Android/Bionic compatibility |
 | `build.h` | Auto-generated build configuration |
+| `loader/loader-info.c` | Auto-generated loader symbol addresses extracted via `readelf` |
+
+Note: `tracee/seccomp.c/h`, `tracee/statx.c/h`, and `path/f2fs-bug.c/h` are inherited from
+vendor/termux-proot with extensive modifications. The others are entirely new.
 
 ---
 
@@ -52,8 +56,19 @@ like `setsockopt`, `socket`, `bind`, `connect`, `mount`, `chroot`, `clone`, `for
 | `PR_linkat` | `linkat` | 37 | Translate paths, try `renameat()`, fallback to copy+delete on EXDEV/EACCES |
 | `PR_getcwd` | `getcwd` | 17 | Read `tracee->fs->cwd`, write to tracee buffer, return length |
 | `PR_faccessat2` | `faccessat2` | 439 | Downgrade to `faccessat` (drop flags arg) and restart |
+| `PR_faccessat` | `faccessat` | 48 | Return 0 (noop — zygote blocks even the base `faccessat` on some kernels) |
 | `PR_renameat2` | `renameat2` | 276 | Downgrade to `renameat` (drop flags arg) and restart |
+| `PR_openat2` | `openat2` | 437 | Downgrade to `openat` (clear SYSARG_5 size=0) and restart |
 | `PR_process_madvise` | `process_madvise` | 440 | Return 0 (noop — advisory syscall) |
+| `PR_fchmodat` | `fchmodat` | 53 | Return 0 (noop — seccomp blocks this on some kernels) |
+| `PR_clone3` | `clone3` | 435 | Convert clone3 args struct to clone register args, return -ENOSYS for CLONE_THREAD, strip CLONE_VM/CLONE_VFORK otherwise |
+| `PR_clone` | `clone` | 220 | Return -ENOSYS for CLONE_THREAD, strip CLONE_VM/CLONE_VFORK otherwise |
+| `PR_setuid` | `setuid` | 146 | Return 0 (noop — fake_id0 handles UID semantics) |
+| `PR_setgid` | `setgid` | 144 | Return 0 (noop — fake_id0 handles GID semantics) |
+| `PR_setreuid` | `setreuid` | 145 | Return 0 (noop) |
+| `PR_setregid` | `setregid` | 143 | Return 0 (noop) |
+| `PR_setfsuid` | `setfsuid` | 151 | Return 0 (noop) |
+| `PR_setfsgid` | `setfsgid` | 152 | Return 0 (noop) |
 
 ### Handler details
 
@@ -94,6 +109,24 @@ the kernel allows.
 **renameat2**: Same pattern — musl uses `renameat2` for `rename()`. Downgraded to `renameat`.
 
 **process_madvise**: Advisory memory advice syscall. Safe to noop.
+
+**setuid/setgid/setreuid/setregid/setfsuid/setfsgid**: The zygote blocks all UID/GID-changing
+syscalls. fake_id0 extension handles the semantic translation, so these handlers just return 0.
+
+**clone3**: Converts the clone3 args struct (passed via pointer) to individual register args for
+the clone syscall. Maps `args_ptr+offset` fields to SYSARG_1-5. Returns -ENOSYS if CLONE_THREAD
+is set (thread creation inside proot is not supported). Strips CLONE_VM and CLONE_VFORK to
+convert vfork-style spawns into regular fork().
+
+**clone**: Same logic as clone3 but for the legacy clone syscall.
+
+### Critical infrastructure: `push_specific_regs(true)` in seccomp handler
+
+In `restart_syscall_after_seccomp()`, our version calls `push_specific_regs(tracee, true)`
+(passing `including_sysnum = true`), while termux passes `false`. This is essential for all
+downgrade handlers (`PR_faccessat2→PR_faccessat`, `PR_openat2→PR_openat`, `PR_renameat2→PR_renameat`,
+`PR_clone3→PR_clone`) — without `true`, the `set_sysnum()` syscall number change would not take
+effect when the kernel processes the registers.
 
 ### Enhanced default case
 
@@ -147,6 +180,12 @@ The `default:` case in the SIGSYS handler differentiates between syscalls:
    signals are suppressed and queued in `tracee->chain.suppressed_signal` for redelivery
    after the chain completes.
 
+6. **SYSCALL_AVOIDER skip condition simplified**: The guard `seccomp_after_ptrace_enter` was
+   removed from the `SYSCALL_AVOIDER` check. In termux, SIGSYS from the avoider was only
+   skipped when `seccomp_after_ptrace_enter` was true. Our version always skips it — the
+   avoider is proot's own voided syscall, and the SIGSYS is always a false positive from
+   the zygote filter firing on the modified -1 syscall number.
+
 ---
 
 ## 4. Syscall Translation (`syscall/syscall.c`)
@@ -188,7 +227,7 @@ The `default:` case in the SIGSYS handler differentiates between syscalls:
 | `PR_statfs`/`PR_statfs64` tmpfs faking | Writes `TMPFS_MAGIC` (0x01021994) for `/dev/shm` path |
 | `PR_statx` handling | Delegates to `handle_statx_syscall()` from `tracee/statx.c` |
 | `PR_ioctl` FICLONE fix | Changes EACCES to EOPNOTSUPP for FICLONE ioctl (from termux) |
-| `PR_readlink`/`PR_readlinkat` `.l2s.` hiding | After `detranslate_path()`, returns EINVAL if result contains `/.l2s/` — makes link2symlink's fake symlinks invisible to `readlink()`, preserving original hard-link semantics |
+| `PR_readlink`/`PR_readlinkat` `.l2s.` hiding | After `detranslate_path()`, applies `substitute_binding()` to replace detranslated path with host-side binding path for absolute paths, then returns EINVAL if result contains `/.l2s/` — makes link2symlink's fake symlinks invisible to `readlink()`, preserving original hard-link semantics |
 
 ### From termux
 - Negative result debug logging (first 50 calls)
@@ -198,7 +237,7 @@ The `default:` case in the SIGSYS handler differentiates between syscalls:
 
 ## 6. Syscall Tables
 
-### `syscall/sysnums-arm64.h` — 15 new entries
+### `syscall/sysnums-arm64.h` — 16 new entries
 
 The arm64 syscall table had a gap from ~245 to 434. We filled in entries so proot can
 recognize these syscalls when intercepted via ptrace or SIGSYS:
@@ -218,6 +257,7 @@ recognize these syscalls when intercepted via ptrace or SIGSYS:
 [288] = PR_pkey_mprotect
 [289] = PR_pkey_alloc
 [290] = PR_pkey_free
+[437] = PR_openat2
 [440] = PR_process_madvise
 ```
 
@@ -225,9 +265,9 @@ recognize these syscalls when intercepted via ptrace or SIGSYS:
 
 Same set plus `PR_kexec_file_load` (320) for x86_64.
 
-### `syscall/sysnums.list` — 24 new names
+### `syscall/sysnums.list` — 25 new names
 
-Added syscall names for all new entries plus `statx`. Moved `statx` to alphabetical
+Added syscall names for all new entries plus `statx` and `openat2`. Moved `statx` to alphabetical
 position (was at end in vendor/proot). Removed `utimensat_time64`.
 
 ---

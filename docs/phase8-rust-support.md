@@ -69,10 +69,23 @@ case PR_clone3: {
 - vfork test: `vfork()` + `execve("/usr/bin/cc")` succeeds (before the fix, this hung
   forever because proot couldn't handle `CLONE_VFORK`)
   ```c
-  // Test: vfork + execve cc
-  pid_t pid = vfork();
-  if (pid == 0) { execve("/usr/bin/cc", ...); _exit(127); }
-  waitpid(pid, &st, 0);
+  #include <unistd.h>
+  #include <stdio.h>
+  #include <sys/wait.h>
+
+  int main() {
+      pid_t pid = vfork();
+      if (pid == 0) {
+          char *argv[] = {"cc", "/tmp/test.c", "-o", "/tmp/test_vf", NULL};
+          char *envp[] = {NULL};
+          execve("/usr/bin/cc", argv, envp);
+          _exit(127);
+      }
+      int st;
+      waitpid(pid, &st, 0);
+      printf("vfork+execve: status=%d\n", WEXITSTATUS(st));
+      return 0;
+  }
   ```
 - Regression tests: `apk`, `vim`, `gcc` all work
 - Committed as `2342418`
