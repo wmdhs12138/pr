@@ -225,7 +225,7 @@ build_proot() {
     [ -x "$objdump" ] || die "OBJDUMP not found: $objdump"
 
     local cflags="--sysroot=${sysroot} -I${sysroot}/usr/include"
-    local ldflags="--sysroot=${sysroot} -L${sysroot}/usr/lib -ltalloc -static -Wl,-z,noexecstack"
+    local ldflags="--sysroot=${sysroot} -L${sysroot}/usr/lib -ltalloc -static -Wl,-z,noexecstack,-z,max-page-size=16384"
 
     info "Building with CC=${cc##*/} ..."
 
