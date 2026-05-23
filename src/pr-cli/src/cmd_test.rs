@@ -4,6 +4,8 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use libc;
+
 use crate::shared::*;
 
 const PIT_BIN: &str = "/tmp/pit";
@@ -20,10 +22,15 @@ struct TapResult {
 }
 
 fn deploy_binary(cache_dir: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::os::unix::io::AsRawFd;
     let bin_path = format!("{}/pit", cache_dir);
-    fs::write(&bin_path, TEST_BINARY).map_err(|e| format!("write {}: {}", bin_path, e))?;
-    fs::set_permissions(&bin_path, fs::Permissions::from_mode(0o755))
-        .map_err(|e| format!("chmod {}: {}", bin_path, e))?;
+    let mut f = fs::File::create(&bin_path)
+        .map_err(|e| format!("create {}: {}", bin_path, e))?;
+    f.write_all(TEST_BINARY)
+        .map_err(|e| format!("write {}: {}", bin_path, e))?;
+    // Use fchmod on the open fd — more reliable than path-based chmod on Android.
+    unsafe { libc::fchmod(f.as_raw_fd(), 0o755); }
     Ok(())
 }
 
@@ -127,6 +134,12 @@ fn parse_tap(tap_output: &str) -> TapResult {
 
 fn run_proot_streaming(rootfs: &str, cmd: &str) -> Result<(), String> {
     let proot = get_native_proot();
+    // --link2symlink MUST remain enabled: Android's SELinux (untrusted_app domain)
+    // blocks the link() syscall outright (EPERM), so every hard-link dpkg tries to
+    // create fails without proot's interception.  The earlier lchown-ENOENT issue
+    // was NOT caused by link2symlink itself but by L2S metadata landing in the
+    // Android cache dir (a different filesystem), leaving dangling symlinks.
+    // That is fixed by pre-creating .l2s inside the rootfs in install_tools().
     let args = build_proot_args(rootfs, true, false, &[]);
     let runtime_env = build_proot_runtime_env();
     let child_env = build_proot_child_env();
@@ -206,11 +219,63 @@ fn detect_package_manager(rootfs: &str) -> Result<&'static str, String> {
 }
 
 fn install_tools(rootfs: &str, pkg_mgr: &str) -> Result<(), String> {
+    // Pre-create .l2s inside the rootfs before launching proot.
+    // build_proot_args() sets PROOT_L2S_DIR to <rootfs>/.l2s when this directory
+    // exists.  Without it, proot defaults L2S storage to the Android cache dir
+    // (a different filesystem), so the content files for L2S symlinks cannot be
+    // hard-linked from the rootfs — the symlinks become dangling and every
+    // subsequent lchown on a .dpkg-new path fails with ENOENT.
+    let _ = fs::create_dir_all(format!("{}/.l2s", rootfs));
+
     msg_status("Installing tools...");
 
     let cmd = match pkg_mgr {
-        "apk" => "apk update 2>&1 && apk add --no-progress vim gcc rust cargo git 2>&1",
-        "apt" => "apt-get update -qq 2>&1 && apt-get install -y -qq vim gcc rustc cargo git 2>&1",
+        "apk" => {
+            // openssh-client provides ssh/scp/ssh-keygen so git can use SSH keys.
+            "apk update 2>&1 && \
+             apk add --no-progress vim gcc rust cargo git openssh-client 2>&1"
+        }
+        "apt" => {
+            // LC_ALL=C LANG=C: proot child env sets LANG=en_US.UTF-8 but the
+            // Debian rootfs has no locale generated yet — perl and dpkg post-install
+            // scripts call `locale` and fail if LANG refers to a missing locale.
+            // PERL_BADLANG=0: suppresses perl's own locale-failure abort.
+            // DEBIAN_FRONTEND=noninteractive: prevents debconf from opening a TTY.
+            // --no-install-recommends: avoids packages whose post-install scripts
+            // require a full systemd/desktop environment.
+            // --force-unsafe-io: skip dpkg's fsync+rename verification pass.
+            //
+            // openssh-client is installed in a second pass after preparing
+            // the environment to work around two Android proot limitations:
+            //
+            // 1. groupadd lock failure: groupadd uses link() to lock /etc/group.
+            //    Android SELinux (untrusted_app) blocks link() → exit 10.
+            //    Fix: replace groupadd/groupdel with no-op stubs.
+            //
+            // 2. chgrp '_ssh' failure: the postinst runs `chgrp _ssh <file>`
+            //    after groupadd, but since the stub didn't write to /etc/group
+            //    the group lookup fails.
+            //    Fix: manually append _ssh / _sshd to /etc/group and /etc/gshadow
+            //    before the second apt-get so chgrp finds the group.
+            "export LC_ALL=C LANG=C PERL_BADLANG=0 DEBIAN_FRONTEND=noninteractive && \
+             apt-get update -q 2>&1 && \
+             apt-get install -y -q \
+             -o Dpkg::Options::=--force-unsafe-io \
+             --no-install-recommends \
+             vim gcc rustc cargo git 2>&1 && \
+             printf '#!/bin/sh\\nexit 0\\n' > /usr/sbin/groupadd && \
+             chmod +x /usr/sbin/groupadd && \
+             printf '#!/bin/sh\\nexit 0\\n' > /usr/sbin/groupdel && \
+             chmod +x /usr/sbin/groupdel && \
+             grep -q '^_ssh:' /etc/group   || echo '_ssh:x:101:'   >> /etc/group && \
+             grep -q '^_sshd:' /etc/group  || echo '_sshd:x:102:'  >> /etc/group && \
+             grep -q '^_ssh:' /etc/gshadow  || echo '_ssh:!::'  >> /etc/gshadow && \
+             grep -q '^_sshd:' /etc/gshadow || echo '_sshd:!::' >> /etc/gshadow && \
+             apt-get install -y -q \
+             -o Dpkg::Options::=--force-unsafe-io \
+             --no-install-recommends \
+             openssh-client 2>&1"
+        }
         _ => return Err(format!("unknown package manager: {}", pkg_mgr)),
     };
 
@@ -262,9 +327,11 @@ pub fn command_test(distro: &str, suite: Option<&str>, verbose: bool) -> Result<
         None => suites.to_vec(),
     };
 
-    let needs_tools = target_suites
-        .iter()
-        .any(|s| ["distro", "gcc", "rust", "git"].contains(s));
+    // Auto-install toolchain when tool suites (gcc, rust, git) are targeted and
+    // the toolchain is not yet present.  Uses the distro's native package manager
+    // (apk for Alpine, apt for Debian-based).
+    let tool_suites = ["gcc", "rust", "git"];
+    let needs_tools = target_suites.iter().any(|s| tool_suites.contains(s));
     if needs_tools {
         let has_tools = Path::new(&format!("{}/usr/bin/rustc", rootfs)).exists()
             || Path::new(&format!("{}/usr/local/bin/rustc", rootfs)).exists();
