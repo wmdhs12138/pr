@@ -505,7 +505,24 @@ static void translated_path(Tracee *tracee, char translated_path[PATH_MAX])
 	    || sysnum == PR_renameat
 	    || sysnum == PR_renameat2
 	    || sysnum == PR_readlink
-	    || sysnum == PR_readlinkat) {
+	    || sysnum == PR_readlinkat
+	    /* Do NOT dereference L2S chains for chown/utimes syscalls.
+	     * On Android (untrusted_app SELinux domain) these operations on
+	     * files deep in the app data dir return ENOENT (masqueraded EPERM).
+	     * By skipping L2S dereferencing the kernel sees the L2S symlink
+	     * itself; fake_id0 then forces the result to 0 so dpkg proceeds.
+	     * (dpkg tolerates EPERM but aborts on ENOENT.) */
+	    || sysnum == PR_lchown
+	    || sysnum == PR_lchown32
+	    || sysnum == PR_chown
+	    || sysnum == PR_chown32
+	    || sysnum == PR_fchown
+	    || sysnum == PR_fchown32
+	    || sysnum == PR_fchownat
+	    || sysnum == PR_utimes
+	    || sysnum == PR_utimensat
+	    || sysnum == PR_futimesat
+	    || sysnum == PR_utime) {
 		return;
 	}
 

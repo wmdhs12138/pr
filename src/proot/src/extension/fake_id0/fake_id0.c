@@ -285,6 +285,14 @@ static FilteredSysnum filtered_sysnums[] = {
 	{ PR_capset,		FILTER_SYSEXIT },
 	{ PR_chmod,		FILTER_SYSEXIT },
 	{ PR_chown,		FILTER_SYSEXIT },
+#ifndef USERLAND
+	/* Intercept utimes/utimensat in EXIT so fake-root can suppress ENOENT
+	 * (Android SELinux masquerades EPERM) on L2S-converted files. */
+	{ PR_utimensat,		FILTER_SYSEXIT },
+	{ PR_utimes,		FILTER_SYSEXIT },
+	{ PR_futimesat,		FILTER_SYSEXIT },
+	{ PR_utime,		FILTER_SYSEXIT },
+#endif
 	{ PR_chown32,		FILTER_SYSEXIT },
 	{ PR_chroot,		FILTER_SYSEXIT },
 	{ PR_execve,		FILTER_SYSEXIT },
@@ -503,19 +511,24 @@ static int adjust_elf_auxv(Tracee *tracee, Config *config)
 static int handle_perm_err_exit_end(Tracee *tracee, Config *config, bool even_if_not_root) {
 	word_t result;
 
-	/* Override only permission errors.  */
 	result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 
-#ifdef USERLAND
-	/** If the call has been set to PR_void, it "succeeded" in
-	 *  altering a meta file correctly.
-	 */ 
-	if(get_sysnum(tracee, CURRENT) == PR_getuid && (int) result != 0) 
+	/* When the syscall was replaced with getuid or void in the ENTER phase
+	 * (to cancel it and fake success), force the result to 0.
+	 * Applies in both USERLAND and non-USERLAND builds:
+	 *   - USERLAND: chown handler writes meta files then calls set_sysnum(PR_getuid)
+	 *   - non-USERLAND: chown handler calls set_sysnum(PR_getuid) so Android's
+	 *     SELinux never sees the chown — it sees a harmless getuid instead.
+	 *     getuid returns app_uid (a positive non-zero value), so without this
+	 *     check the result would reach the caller as a non-zero "error". */
+	if ((get_sysnum(tracee, CURRENT) == PR_getuid
+	     || get_sysnum(tracee, CURRENT) == PR_void)
+	    && (int) result != 0) {
 		poke_reg(tracee, SYSARG_RESULT, 0);
-	if(get_sysnum(tracee, CURRENT) == PR_void && (int) result != 0) 
-		poke_reg(tracee, SYSARG_RESULT, 0);
-#endif
+		return 0;
+	}
 
+	/* Override only permission errors.  */
 	if ((int) result != -EPERM && (int) result != -EACCES)
 		return 0;
 
@@ -919,6 +932,22 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 	case PR_fchmodat:
 	case PR_fchownat: 
 		return handle_perm_err_exit_end(tracee, config, false);
+
+#ifndef USERLAND
+	case PR_utimensat:
+	case PR_utimes:
+	case PR_futimesat:
+	case PR_utime: {
+		/* On Android, utimensat/utimes on L2S-converted symlinks returns
+		 * ENOENT (SELinux masquerades EPERM for timestamp ops on app data
+		 * files).  fake-root forces any error to 0 so dpkg/tar proceed.
+		 * Successful calls (result==0) pass through unchanged. */
+		word_t ts_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+		if (config->euid == 0 && (int) ts_result < 0)
+			poke_reg(tracee, SYSARG_RESULT, 0);
+		return 0;
+	}
+#endif
 
 	case PR_setxattr:
 	case PR_lsetxattr:

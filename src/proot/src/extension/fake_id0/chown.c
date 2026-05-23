@@ -21,6 +21,17 @@ int handle_chown_enter_end(Tracee *tracee, Config *config, Reg uid_sysarg, Reg g
 	if (gid == config->rgid)
 		poke_reg(tracee, gid_sysarg, getgid());
 
+	/* On Android the kernel (SELinux untrusted_app domain) returns ENOENT
+	 * (a masqueraded EPERM) for chown/lchown on files inside the app data
+	 * dir — even when uid/gid already match the app's own ids.  dpkg treats
+	 * EPERM as ignorable but aborts on ENOENT, so the install fails.
+	 *
+	 * Fix: replace the syscall with getuid, which fake_id0 will intercept
+	 * in the EXIT phase and fake to return config->ruid (0).  The caller
+	 * therefore sees lchown returning 0 (success) and the kernel never
+	 * attempts the operation at all. */
+	set_sysnum(tracee, PR_getuid);
+
 	return 0;
 }
 #endif /* ifndef USERLAND */
