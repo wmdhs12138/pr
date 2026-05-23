@@ -1,8 +1,11 @@
+use std::ffi::CString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
+
+use libc;
 
 use crate::plugin::load_plugins;
 use crate::shared::{
@@ -23,6 +26,49 @@ fn chmod_recursive(path: &Path) {
         }
     }
     let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
+}
+
+/// Remove a directory tree, handling 0000-permission proot bind-mount stubs.
+///
+/// proot creates empty placeholder dirs (apex, odm, product, sdcard, system,
+/// system_ext, vendor) with mode 0000.  `busybox rm -rf` bails on them because
+/// it tries `opendir()` which requires execute permission.  `libc::rmdir()` only
+/// needs write permission on the *parent*, so it succeeds even on 0000-perms
+/// empty dirs.  For non-empty dirs we chmod 0700 first, then recurse.
+fn force_remove_dir_all(path: &Path) {
+    // Fast path: try rmdir first.  For empty dirs (even 0000-perms) this works
+    // because the kernel only checks write permission on the parent directory.
+    if let Ok(cstr) = CString::new(path.to_string_lossy().as_bytes()) {
+        let ret = unsafe { libc::rmdir(cstr.as_ptr()) };
+        if ret == 0 {
+            return;
+        }
+    }
+
+    // rmdir failed — directory is non-empty or we can't stat it.
+    // chmod 0700 so we can list and enter it.
+    if let Ok(cstr) = CString::new(path.to_string_lossy().as_bytes()) {
+        unsafe { libc::chmod(cstr.as_ptr(), 0o700); }
+    }
+
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            match fs::symlink_metadata(&p) {
+                Ok(m) if m.is_dir() => force_remove_dir_all(&p),
+                _ => {
+                    if let Ok(cstr) = CString::new(p.to_string_lossy().as_bytes()) {
+                        unsafe { libc::unlink(cstr.as_ptr()); }
+                    }
+                }
+            }
+        }
+    }
+
+    // rmdir after children are cleared
+    if let Ok(cstr) = CString::new(path.to_string_lossy().as_bytes()) {
+        unsafe { libc::rmdir(cstr.as_ptr()); }
+    }
 }
 
 pub fn command_remove(distro_name: &str, is_reset: bool) -> Result<(), String> {
@@ -60,8 +106,24 @@ pub fn command_remove(distro_name: &str, is_reset: bool) -> Result<(), String> {
     let display_name = plugin.map(|p| p.name.as_str()).unwrap_or(distro_name);
     msg_status(&format!("Wiping the rootfs of {}...", display_name));
 
-    chmod_recursive(Path::new(&rootfs));
-    fs::remove_dir_all(&rootfs).map_err(|e| format!("failed to remove rootfs: {}", e))?;
+    // Use busybox rm -rf for the bulk of the tree (fast, handles symlinks, etc.).
+    // Ignore its exit code: it exits 1 on proot's 0000-permission bind-mount
+    // stub dirs (apex, odm, product, sdcard, system, system_ext, vendor) because
+    // it can't opendir() them.  We clean those up with force_remove_dir_all().
+    let busybox = get_native_busybox();
+    let _ = Command::new(&busybox)
+        .arg0("busybox")
+        .args(["rm", "-rf", &rootfs])
+        .status();
+
+    // Sweep anything busybox left behind (empty 0000-perms dirs, etc.).
+    let rootfs_path = Path::new(&rootfs);
+    if rootfs_path.exists() {
+        force_remove_dir_all(rootfs_path);
+    }
+    if rootfs_path.exists() {
+        return Err(format!("failed to fully remove rootfs '{}'", rootfs));
+    }
 
     msg_status("Finished.");
     Ok(())
