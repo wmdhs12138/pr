@@ -310,7 +310,7 @@ pub fn command_test(distro: &str, suite: Option<&str>, verbose: bool) -> Result<
     }
 
     let suites = [
-        "distro", "clone", "readlink", "gcc", "rust", "git", "pipe", "general",
+        "distro", "clone", "readlink", "gcc", "rust", "git", "pipe", "general", "ssh",
     ];
     let target_suites: Vec<&str> = match suite {
         Some(s) => {
@@ -330,7 +330,7 @@ pub fn command_test(distro: &str, suite: Option<&str>, verbose: bool) -> Result<
     // Auto-install toolchain when tool suites (gcc, rust, git) are targeted and
     // the toolchain is not yet present.  Uses the distro's native package manager
     // (apk for Alpine, apt for Debian-based).
-    let tool_suites = ["gcc", "rust", "git"];
+    let tool_suites = ["gcc", "rust", "git", "ssh"];
     let needs_tools = target_suites.iter().any(|s| tool_suites.contains(s));
     if needs_tools {
         let has_tools = Path::new(&format!("{}/usr/bin/rustc", rootfs)).exists()

@@ -10,6 +10,7 @@ mod git;
 mod pipe;
 mod readlink;
 mod rust;
+mod ssh;
 
 type TestResult = Result<(), String>;
 
@@ -257,6 +258,28 @@ const SUITES: &[Suite] = &[
             Test {
                 name: "environment inheritance",
                 run: general::test_env,
+            },
+        ],
+    },
+    Suite {
+        name: "ssh",
+        probe: ssh::probe,
+        tests: &[
+            Test {
+                name: "ssh -V (OpenSSH version)",
+                run: ssh::test_ssh_version,
+            },
+            Test {
+                name: "ssh-keygen ed25519 key generation",
+                run: ssh::test_ssh_keygen_ed25519,
+            },
+            Test {
+                name: "ssh-keygen SHA256 fingerprint",
+                run: ssh::test_ssh_keygen_fingerprint,
+            },
+            Test {
+                name: "scp available",
+                run: ssh::test_scp_available,
             },
         ],
     },
