@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
@@ -168,11 +169,53 @@ fn extract_tarball(
             std::io::copy(&mut entry, &mut out)
                 .map_err(|e| format!("write {}: {}", dest_path.display(), e))?;
             let mode = entry.header().mode().unwrap_or(0o644);
-            let _ = fs::set_permissions(dest_path, fs::Permissions::from_mode(mode));
+            // Use fchmod on the open fd for reliable permission setting on Android.
+            // Strip setuid/setgid (0o6000) bits; Android blocks those for non-root.
+            let safe_mode = (mode & 0o1777) as libc::mode_t;
+            unsafe { libc::fchmod(out.as_raw_fd(), safe_mode); }
         }
     }
 
+    // Post-extraction: ensure ELF binaries have their execute bit set.
+    // This is a safety net in case fchmod silently failed for some entries.
+    fix_elf_execute_bits(dest);
+
     Ok(())
+}
+
+/// Walk `rootfs`, read the first 4 bytes of every regular file, and add the
+/// user/group/other execute bit for any file whose magic is `\x7fELF`.
+fn fix_elf_execute_bits(rootfs: &str) {
+    let Ok(walker) = fs::read_dir(rootfs) else { return };
+    let mut stack: Vec<std::path::PathBuf> = walker
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+
+    while let Some(path) = stack.pop() {
+        let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+        if meta.is_dir() {
+            if let Ok(rd) = fs::read_dir(&path) {
+                stack.extend(rd.flatten().map(|e| e.path()));
+            }
+        } else if meta.is_file() {
+            let mode = meta.permissions().mode();
+            if mode & 0o111 != 0 {
+                continue; // already executable
+            }
+            // Peek at magic bytes
+            let mut buf = [0u8; 4];
+            if let Ok(mut f) = fs::File::open(&path) {
+                use std::io::Read as _;
+                if f.read_exact(&mut buf).is_ok() && &buf == b"\x7fELF" {
+                    let new_mode = (mode | 0o111) as libc::mode_t;
+                    if let Ok(cstr) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
+                        unsafe { libc::chmod(cstr.as_ptr(), new_mode); }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn download_file(url: &str, output_path: &str, max_retries: u32) -> Result<(), String> {
@@ -504,22 +547,13 @@ fn write_config_files(rootfs: &str, distro_name: &str) -> Result<(), String> {
 }
 
 fn cleanup_on_failure(rootfs: &str, distro_name: &str) {
-    let _ = fs::set_permissions(rootfs, fs::Permissions::from_mode(0o755));
-    fn chmod_recursive(path: &Path) {
-        if let Ok(entries) = fs::read_dir(path) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_dir() {
-                    let _ = fs::set_permissions(&p, fs::Permissions::from_mode(0o755));
-                    chmod_recursive(&p);
-                } else {
-                    let _ = fs::set_permissions(&p, fs::Permissions::from_mode(0o644));
-                }
-            }
-        }
-    }
-    chmod_recursive(Path::new(rootfs));
-    let _ = fs::remove_dir_all(rootfs);
+    // Use busybox rm -rf: fast, reliable for large trees, no chmod pre-pass needed
+    // since the app owns every file it created.
+    let busybox = get_native_busybox();
+    let _ = Command::new(&busybox)
+        .arg0("busybox")
+        .args(["rm", "-rf", rootfs])
+        .status();
 
     let override_path = format!("{}/{}.override.sh", get_plugins_dir(), distro_name);
     if Path::new(&override_path).exists() {
