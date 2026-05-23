@@ -42,6 +42,7 @@ src/proot-integration-test/
   src/git.rs              git init, git config, cargo new with vcs git (3 tests)
   src/pipe.rs             pipe/pipe2 syscall availability (3 tests)
   src/general.rs          file I/O, symlinks, pipes, signals, env (5 tests)
+  src/ssh.rs              openssh-client: version, keygen, fingerprint, scp (4 tests)
 ```
 
 ---
@@ -58,6 +59,7 @@ src/proot-integration-test/
 | git | 3 | `/usr/bin/git` exists | T8.3 si_syscall=-1, T8.4 setuid/setgid handlers |
 | pipe | 3 | always | pipe2 availability (disproves blocked-by-seccomp theory) |
 | general | 5 | always | Basic proot stability: file I/O, symlinks, pipes, signals, env |
+| ssh | 4 | `/usr/bin/ssh` exists | openssh-client: version, ed25519 keygen, fingerprint, scp binary |
 
 ### Suite Details
 
@@ -125,6 +127,19 @@ Each test uses `run_sh_timed()` which prints timing diagnostics to stderr:
 4. **signal propagation** — SIGINT trap/delivery
 5. **environment inheritance** — `$HOME` through proot
 
+#### ssh (4 tests)
+
+Probe: `/usr/bin/ssh` exists (installed by the apt second-pass in `install_tools()`).
+Auto-skipped on Alpine (openssh-client not in apk add list) and on any distro where
+openssh-client is absent.
+
+1. **ssh -V (OpenSSH version)** — `ssh -V 2>&1` contains "OpenSSH"
+2. **ssh-keygen ed25519 key generation** — `ssh-keygen -t ed25519 -N '' -f /tmp/pit-ssh-ed25519` exits 0
+3. **ssh-keygen SHA256 fingerprint** — `ssh-keygen -l -f <pub>` outputs a `SHA256:` line
+4. **scp available** — `/usr/bin/scp` exists and `scp 2>&1 || true` prints a usage line containing "scp"
+
+Note: no network is required. All tests are local (key generation + binary invocation only).
+
 ---
 
 ## CLI Usage
@@ -135,7 +150,7 @@ pr-cli test <distro> -s <suite>   # Run single suite
 pr-cli test <distro> -v           # Verbose (shows rootfs path)
 ```
 
-Available suites: distro, clone, readlink, gcc, rust, git, pipe, general
+Available suites: distro, clone, readlink, gcc, rust, git, pipe, general, ssh
 
 ---
 

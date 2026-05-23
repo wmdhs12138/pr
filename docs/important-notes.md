@@ -134,8 +134,8 @@ library.
 
 **Verified working** (app process with seccomp: 2):
 - Alpine: `apk update`, `apk add vim gcc rust cargo git openssh` — all 0 errors
-- Debian: `apt update && apt install vim gcc rustc cargo git` — all 0 errors
-- Full test suite: **37/37 pass** on both Alpine and Debian
+- Debian: `apt update && apt install vim gcc rustc cargo git openssh-client` — all 0 errors
+- Full test suite (41 tests including ssh suite) on both Alpine and Debian
 
 ### Key Files
 
@@ -146,6 +146,109 @@ library.
 - `src/pr-cli/src/shared.rs` — `build_proot_args()` with `--change-id=0:0`, `--kernel-release`, bind mounts
 - `docs/phase5-alpine.md` — Alpine-specific investigation and seccomp findings
 - `docs/proot-improvement.md` — Full comparison of our proot vs vendor versions
+
+---
+
+## Debian dpkg / apt Quirks on Android
+
+`apt-get install` inside proot on Android hits two failures that do not occur on a native
+Linux system. Both stem from Android SELinux (`untrusted_app` domain) blocking filesystem
+operations that dpkg and package postinst scripts rely on.
+
+See `docs/proot-improvement.md §28` for the proot C-level fixes (lchown/utimensat ENOENT).
+This section covers the CLI-level workarounds in `src/pr-cli/src/cmd_test.rs`.
+
+### Failure 1 — dpkg unpack: lchown/utimensat ENOENT on `.dpkg-new` files
+
+**Symptom:**
+```
+error setting ownership of /usr/bin/perlthanks.dpkg-new: No such file or directory
+error setting timestamp of /usr/bin/perlthanks.dpkg-new: No such file or directory
+```
+
+**Cause:** link2symlink converts dpkg's `link()` calls into L2S symlink chains. proot's
+`translated_path()` dereferences those chains for `lchown`/`utimensat`, handing the kernel
+a deep app-data path. Android SELinux returns ENOENT (masqueraded EPERM) for such paths.
+dpkg aborts on ENOENT.
+
+**Fix:** proot C changes in `chown.c`, `fake_id0.c`, `link2symlink.c` (see §28 in
+`proot-improvement.md`). No CLI workaround needed for this failure.
+
+---
+
+### Failure 2 — openssh-client postinst: groupadd cannot lock /etc/group
+
+**Symptom:**
+```
+groupadd: /etc/group.23430 file stat error: No such file or directory
+groupadd: cannot lock /etc/group; try again later.
+fatal: `/sbin/groupadd -g 101 _ssh' returned error code 10. Exiting.
+dpkg: error processing package openssh-client (--configure):
+  installed openssh-client package post-installation script subprocess returned error exit status 82
+```
+
+**Cause:** `groupadd` locks `/etc/group` by creating a hard link `/etc/group.NNNNN`. Android
+SELinux (`untrusted_app`) blocks `link()` outright with EPERM, so link2symlink intercepts it
+and creates an L2S symlink chain instead. `groupadd` then calls `stat("/etc/group.NNNNN")` to
+verify the link — but the L2S symlink points into the app cache dir (a different filesystem),
+which is inaccessible to the stat call inside proot. groupadd exits with code 10 ("cannot lock").
+
+**Root cause of the cross-filesystem issue:** L2S metadata is stored in `PROOT_L2S_DIR`. If
+that directory is on a different filesystem from the rootfs (e.g. Android cache dir vs the
+rootfs partition), hard-linking from L2S content back to the rootfs fails. This is pre-empted
+by `install_tools()` pre-creating `.l2s/` inside the rootfs itself.
+
+---
+
+### Failure 3 — openssh-client postinst: chgrp '_ssh' invalid group
+
+**Symptom:**
+```
+chgrp: invalid group: '_ssh'
+dpkg: error processing package openssh-client (--configure): ...error exit status 1
+```
+
+**Cause:** The postinst calls `groupadd -g 101 _ssh` to create the group, then immediately
+calls `chgrp _ssh /some/file`. With groupadd stubbed out (see fix below), the stub exits 0
+but does not write to `/etc/group`, so `chgrp` cannot resolve the group name.
+
+---
+
+### Solution — two-pass apt install with groupadd stub
+
+`install_tools()` in `src/pr-cli/src/cmd_test.rs` runs two apt-get passes for Debian:
+
+**Pass 1** — install main tools normally:
+```sh
+apt-get install -y vim gcc rustc cargo git
+```
+None of these packages have postinst scripts that call groupadd.
+
+**Pass 2** — prepare environment, then install openssh-client:
+```sh
+# 1. Replace groupadd/groupdel with no-op stubs.
+#    Real groupadd cannot work on Android (link() blocked by SELinux).
+printf '#!/bin/sh\nexit 0\n' > /usr/sbin/groupadd && chmod +x /usr/sbin/groupadd
+printf '#!/bin/sh\nexit 0\n' > /usr/sbin/groupdel && chmod +x /usr/sbin/groupdel
+
+# 2. Manually append _ssh and _sshd to /etc/group and /etc/gshadow.
+#    This satisfies the chgrp call in the postinst without needing groupadd
+#    to actually write the entries.
+grep -q '^_ssh:'  /etc/group   || echo '_ssh:x:101:'  >> /etc/group
+grep -q '^_sshd:' /etc/group   || echo '_sshd:x:102:' >> /etc/group
+grep -q '^_ssh:'  /etc/gshadow || echo '_ssh:!::'     >> /etc/gshadow
+grep -q '^_sshd:' /etc/gshadow || echo '_sshd:!::'    >> /etc/gshadow
+
+# 3. Now openssh-client installs cleanly.
+apt-get install -y openssh-client
+```
+
+The groupadd/groupdel stubs are left in place permanently. Real `groupadd` cannot work in
+this environment (link() is always blocked), so the stubs are the correct long-term state.
+
+### Key file
+
+`src/pr-cli/src/cmd_test.rs` — `install_tools()`, `"apt"` branch.
 
 ---
 

@@ -612,3 +612,83 @@ that `openat` for `/usr/lib/perl5/core_perl/CORE/libncursesw.so.6` was the faili
 aarch64, `SYSARG_1` and `SYSARG_RESULT` both map to `regs[0]` (x0). Before `fetch_regs()`,
 the cached register values are stale from the previous syscall stage, producing misleading
 data (e.g. AT_FDCWD=-100 shown as the "result" when it was actually the stale enter-stage arg).
+
+---
+
+## 28. Solved: lchown/utimensat ENOENT during dpkg unpack
+
+### Problem
+
+`apt-get install` on Debian failed during dpkg's unpack phase with:
+
+```
+error setting ownership of /usr/bin/perlthanks.dpkg-new: No such file or directory
+error setting timestamp of /usr/bin/perlthanks.dpkg-new: No such file or directory
+```
+
+These are `.dpkg-new` files created by dpkg while unpacking a package archive. dpkg
+uses `lchown()` to set file ownership and `utimensat()` to set timestamps on each
+unpacked file. Both failed with ENOENT.
+
+### Root cause — link2symlink interaction with Android SELinux
+
+dpkg creates `.dpkg-new` files, then renames them over the real path once unpacked.
+With `--link2symlink` enabled (required on Android — SELinux blocks real `link()`
+outright), every `link()` call that dpkg makes goes through L2S and produces an L2S
+symlink chain.
+
+`translated_path()` in `link2symlink.c` has a `TRANSLATED_PATH` event handler that
+dereferences L2S symlink chains: when a syscall touches a path that is an L2S symlink,
+proot resolves the chain to give the kernel the actual `.l2s/` content file path.
+
+For `lchown` and `utimensat`, this dereference causes the kernel to see a `.l2s/`
+content path deep inside the app data directory. Android SELinux (`untrusted_app`
+domain) returns ENOENT for `lchown`/`utimensat` on such paths — it is masquerading
+EPERM as ENOENT to prevent information leakage.
+
+dpkg treats EPERM as ignorable (can continue) but aborts on ENOENT, so the install
+fails.
+
+### Fix — three coordinated changes
+
+**1. `link2symlink.c` — skip L2S dereferencing for chown/utimes syscalls**
+
+Added `lchown`, `chown`, `fchown`, `fchownat`, `utimes`, `utimensat`, `futimesat`,
+`utime` to the `translated_path()` exclusion list. When these syscalls touch an L2S
+symlink, proot now passes the symlink path itself to the kernel rather than resolving
+the chain. The kernel operates on the L2S symlink node (not the content file), avoiding
+the deep-app-data path that Android SELinux blocks.
+
+**2. `chown.c` (non-USERLAND) — cancel the chown syscall entirely**
+
+Even with the L2S skip, Android SELinux still blocks `lchown` on the app data dir
+with ENOENT. The fix replaces the `lchown` syscall with `getuid` in the ENTER phase
+(`set_sysnum(tracee, PR_getuid)`), so the kernel executes `getuid` instead. The kernel
+never attempts the ownership change at all.
+
+```c
+/* On Android the kernel (SELinux untrusted_app domain) returns ENOENT
+ * (a masqueraded EPERM) for chown/lchown on files inside the app data
+ * dir.  Fix: replace the syscall with getuid, which fake_id0 will
+ * intercept in the EXIT phase and fake to return config->ruid (0). */
+set_sysnum(tracee, PR_getuid);
+```
+
+**3. `fake_id0.c` — force getuid/void result to 0 in both USERLAND and non-USERLAND**
+
+`getuid` returns the Android app UID (e.g. 10234) as the lchown return value. Callers
+(dpkg, tar) see a non-zero result and report "Cannot change ownership". The fix: in
+`handle_perm_err_exit_end`, force the result to 0 whenever the current syscall number
+is `PR_getuid` or `PR_void` and the result is non-zero. Previously this block was
+guarded by `#ifdef USERLAND`, so non-USERLAND builds did not zero it.
+
+For `utimensat`/`utimes`/`futimesat`/`utime`, a separate EXIT handler in the
+non-USERLAND code path forces any negative result to 0 when `euid == 0`.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `extension/link2symlink/link2symlink.c` | Added chown+utimes variants to `translated_path()` exclusion list |
+| `extension/fake_id0/chown.c` | non-USERLAND: replace lchown with `PR_getuid` via `set_sysnum` |
+| `extension/fake_id0/fake_id0.c` | Removed `#ifdef USERLAND` guard from PR_getuid/PR_void result-zeroing; added non-USERLAND EXIT handler for utimes variants |
