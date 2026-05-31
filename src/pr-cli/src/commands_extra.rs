@@ -7,10 +7,12 @@ use std::process::Command;
 
 use libc;
 
+use crate::install_model::load_oci_install_metadata;
 use crate::plugin::load_plugins;
 use crate::shared::{
-    get_download_cache_dir, get_installed_rootfs_dir, get_native_busybox,
-    get_plugins_dir, msg_error, msg_status,
+    get_download_cache_dir, get_installed_rootfs_dir, get_native_busybox, get_oci_container_dir,
+    get_oci_container_manifest_path, get_oci_containers_dir, get_plugins_dir, msg_error,
+    msg_status, resolve_installed_rootfs, InstalledSourceType,
 };
 
 fn chmod_recursive(path: &Path) {
@@ -72,29 +74,15 @@ fn force_remove_dir_all(path: &Path) {
 }
 
 pub fn command_remove(distro_name: &str, is_reset: bool) -> Result<(), String> {
-    let installed_rootfs_dir = get_installed_rootfs_dir();
     let plugins_dir = get_plugins_dir();
-
-    let plugins = load_plugins(Path::new(&plugins_dir));
-    if !plugins.iter().any(|p| p.alias == distro_name) {
-        println!();
-        msg_error(&format!(
-            "unknown distribution '{}' was requested to be removed.",
-            distro_name
-        ));
-        println!();
-        return Err("unknown distribution".to_string());
-    }
-
-    let rootfs = format!("{}/{}", installed_rootfs_dir, distro_name);
-    if !Path::new(&rootfs).is_dir() {
+    let Some((rootfs, source_type)) = resolve_installed_rootfs(distro_name) else {
         println!();
         msg_error(&format!("distribution '{}' is not installed.", distro_name));
         println!();
         return Err("not installed".to_string());
-    }
+    };
 
-    if !is_reset {
+    if !is_reset && source_type == InstalledSourceType::Legacy {
         let override_path = format!("{}/{}.override.sh", plugins_dir, distro_name);
         if Path::new(&override_path).exists() {
             msg_status(&format!("Deleting file '{}'...", override_path));
@@ -102,9 +90,16 @@ pub fn command_remove(distro_name: &str, is_reset: bool) -> Result<(), String> {
         }
     }
 
+    let plugins = load_plugins(Path::new(&plugins_dir));
     let plugin = plugins.iter().find(|p| p.alias == distro_name);
     let display_name = plugin.map(|p| p.name.as_str()).unwrap_or(distro_name);
     msg_status(&format!("Wiping the rootfs of {}...", display_name));
+
+    let install_path = if source_type == InstalledSourceType::Oci {
+        get_oci_container_dir(distro_name)
+    } else {
+        rootfs.clone()
+    };
 
     // Use busybox rm -rf for the bulk of the tree (fast, handles symlinks, etc.).
     // Ignore its exit code: it exits 1 on proot's 0000-permission bind-mount
@@ -113,16 +108,16 @@ pub fn command_remove(distro_name: &str, is_reset: bool) -> Result<(), String> {
     let busybox = get_native_busybox();
     let _ = Command::new(&busybox)
         .arg0("busybox")
-        .args(["rm", "-rf", &rootfs])
+        .args(["rm", "-rf", &install_path])
         .status();
 
     // Sweep anything busybox left behind (empty 0000-perms dirs, etc.).
-    let rootfs_path = Path::new(&rootfs);
+    let rootfs_path = Path::new(&install_path);
     if rootfs_path.exists() {
         force_remove_dir_all(rootfs_path);
     }
     if rootfs_path.exists() {
-        return Err(format!("failed to fully remove rootfs '{}'", rootfs));
+        return Err(format!("failed to fully remove path '{}'", install_path));
     }
 
     msg_status("Finished.");
@@ -130,7 +125,31 @@ pub fn command_remove(distro_name: &str, is_reset: bool) -> Result<(), String> {
 }
 
 pub fn command_reset(distro_name: &str) -> Result<(), String> {
-    let installed_rootfs_dir = get_installed_rootfs_dir();
+    let Some((_rootfs, source_type)) = resolve_installed_rootfs(distro_name) else {
+        println!();
+        msg_error(&format!("distribution '{}' is not installed.", distro_name));
+        println!();
+        return Err("not installed".to_string());
+    };
+
+    if source_type == InstalledSourceType::Oci {
+        let metadata_path = get_oci_container_manifest_path(distro_name);
+        let metadata = load_oci_install_metadata(Path::new(&metadata_path)).map_err(|e| {
+            msg_error(&format!(
+                "cannot reset OCI install '{}' because metadata is unreadable: {}",
+                distro_name, e
+            ));
+            e
+        })?;
+        command_remove(distro_name, true)?;
+        return crate::install::command_install(
+            &metadata.original_source_reference,
+            Some(distro_name),
+            None,
+            None,
+        );
+    }
+
     let plugins_dir = get_plugins_dir();
 
     let plugins = load_plugins(Path::new(&plugins_dir));
@@ -142,14 +161,6 @@ pub fn command_reset(distro_name: &str) -> Result<(), String> {
         ));
         println!();
         return Err("unknown distribution".to_string());
-    }
-
-    let rootfs = format!("{}/{}", installed_rootfs_dir, distro_name);
-    if !Path::new(&rootfs).is_dir() {
-        println!();
-        msg_error(&format!("distribution '{}' is not installed.", distro_name));
-        println!();
-        return Err("not installed".to_string());
     }
 
     command_remove(distro_name, true)?;
@@ -224,25 +235,15 @@ fn chmod_readable_recursive(path: &Path) {
 
 pub fn command_backup(distro_name: &str, output_path: Option<&str>) -> Result<(), String> {
     let installed_rootfs_dir = get_installed_rootfs_dir();
+    let oci_containers_dir = get_oci_containers_dir();
     let plugins_dir = get_plugins_dir();
-
-    let plugins = load_plugins(Path::new(&plugins_dir));
-    if !plugins.iter().any(|p| p.alias == distro_name) {
-        println!();
-        msg_error(&format!(
-            "unknown distribution '{}' was requested for backup.",
-            distro_name
-        ));
-        return Err("unknown distribution".to_string());
-    }
-
-    let rootfs = format!("{}/{}", installed_rootfs_dir, distro_name);
-    if !Path::new(&rootfs).is_dir() {
+    let Some((rootfs, source_type)) = resolve_installed_rootfs(distro_name) else {
         println!();
         msg_error(&format!("distribution '{}' is not installed.", distro_name));
         return Err("not installed".to_string());
-    }
+    };
 
+    let plugins = load_plugins(Path::new(&plugins_dir));
     let plugin = plugins.iter().find(|p| p.alias == distro_name);
     let display_name = plugin.map(|p| p.name.as_str()).unwrap_or(distro_name);
 
@@ -275,54 +276,80 @@ pub fn command_backup(distro_name: &str, output_path: Option<&str>) -> Result<()
     msg_status("Fixing file permissions in rootfs...");
     chmod_readable_recursive(Path::new(&rootfs));
 
-    let plugin_file = if Path::new(&format!("{}/{}.sh", plugins_dir, distro_name)).exists() {
-        format!("{}.sh", distro_name)
-    } else {
-        format!("{}.override.sh", distro_name)
-    };
-
     let busybox = get_native_busybox();
-
-    msg_status("Archiving the rootfs and plug-in...");
-    let parent_rootfs = Path::new(&installed_rootfs_dir)
-        .parent()
-        .unwrap_or(Path::new("/"))
-        .to_string_lossy()
-        .to_string();
-    let rootfs_basename = Path::new(&installed_rootfs_dir)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let parent_plugins = Path::new(&plugins_dir)
-        .parent()
-        .unwrap_or(Path::new("/"))
-        .to_string_lossy()
-        .to_string();
-    let plugins_basename = Path::new(&plugins_dir)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    let status = Command::new(&busybox)
-        .arg0("busybox")
-        .arg("tar")
-        .args([
-            "-c",
-            "--auto-compress",
-            "--warning=no-file-ignored",
-            "-f",
-            &output,
-            "-C",
-            &parent_plugins,
-            &format!("{}/{}", plugins_basename, plugin_file),
-            "-C",
-            &parent_rootfs,
-            &format!("{}/{}", rootfs_basename, distro_name),
-        ])
-        .status()
-        .map_err(|e| format!("exec tar: {}", e))?;
+    let status = if source_type == InstalledSourceType::Legacy {
+        let plugin_file = if Path::new(&format!("{}/{}.sh", plugins_dir, distro_name)).exists() {
+            format!("{}.sh", distro_name)
+        } else {
+            format!("{}.override.sh", distro_name)
+        };
+        msg_status("Archiving the rootfs and plug-in...");
+        let parent_rootfs = Path::new(&installed_rootfs_dir)
+            .parent()
+            .unwrap_or(Path::new("/"))
+            .to_string_lossy()
+            .to_string();
+        let rootfs_basename = Path::new(&installed_rootfs_dir)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let parent_plugins = Path::new(&plugins_dir)
+            .parent()
+            .unwrap_or(Path::new("/"))
+            .to_string_lossy()
+            .to_string();
+        let plugins_basename = Path::new(&plugins_dir)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        Command::new(&busybox)
+            .arg0("busybox")
+            .arg("tar")
+            .args([
+                "-c",
+                "--auto-compress",
+                "--warning=no-file-ignored",
+                "-f",
+                &output,
+                "-C",
+                &parent_plugins,
+                &format!("{}/{}", plugins_basename, plugin_file),
+                "-C",
+                &parent_rootfs,
+                &format!("{}/{}", rootfs_basename, distro_name),
+            ])
+            .status()
+            .map_err(|e| format!("exec tar: {}", e))?
+    } else {
+        msg_status("Archiving the OCI container directory...");
+        let parent_containers = Path::new(&oci_containers_dir)
+            .parent()
+            .unwrap_or(Path::new("/"))
+            .to_string_lossy()
+            .to_string();
+        let containers_basename = Path::new(&oci_containers_dir)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        Command::new(&busybox)
+            .arg0("busybox")
+            .arg("tar")
+            .args([
+                "-c",
+                "--auto-compress",
+                "--warning=no-file-ignored",
+                "-f",
+                &output,
+                "-C",
+                &parent_containers,
+                &format!("{}/{}", containers_basename, distro_name),
+            ])
+            .status()
+            .map_err(|e| format!("exec tar: {}", e))?
+    };
 
     if !status.success() {
         let _ = fs::remove_file(&output);
@@ -336,6 +363,7 @@ pub fn command_backup(distro_name: &str, output_path: Option<&str>) -> Result<()
 
 pub fn command_restore(tarball_path: &str) -> Result<(), String> {
     let installed_rootfs_dir = get_installed_rootfs_dir();
+    let oci_containers_dir = get_oci_containers_dir();
     let plugins_dir = get_plugins_dir();
 
     if !Path::new(tarball_path).exists() {
@@ -347,13 +375,31 @@ pub fn command_restore(tarball_path: &str) -> Result<(), String> {
         return Err("path is directory".to_string());
     }
 
-    fs::create_dir_all(&installed_rootfs_dir)
-        .map_err(|e| format!("create installed-rootfs dir: {}", e))?;
-    fs::create_dir_all(&plugins_dir).map_err(|e| format!("create plugins dir: {}", e))?;
-
-    msg_status("Extracting distribution plug-in and rootfs from the tarball...");
-
     let busybox = get_native_busybox();
+    let list_output = Command::new(&busybox)
+        .arg0("busybox")
+        .arg("tar")
+        .args(["-tf", tarball_path])
+        .output()
+        .map_err(|e| format!("list tarball: {}", e))?;
+    if !list_output.status.success() {
+        return Err("unable to inspect tarball".to_string());
+    }
+    let listing = String::from_utf8_lossy(&list_output.stdout);
+    let contains_oci = listing
+        .lines()
+        .any(|line| line.starts_with("containers/"));
+
+    if contains_oci {
+        fs::create_dir_all(&oci_containers_dir)
+            .map_err(|e| format!("create containers dir: {}", e))?;
+        msg_status("Extracting OCI container data from the tarball...");
+    } else {
+        fs::create_dir_all(&installed_rootfs_dir)
+            .map_err(|e| format!("create installed-rootfs dir: {}", e))?;
+        fs::create_dir_all(&plugins_dir).map_err(|e| format!("create plugins dir: {}", e))?;
+        msg_status("Extracting distribution plug-in and rootfs from the tarball...");
+    }
     let parent_rootfs = Path::new(&installed_rootfs_dir)
         .parent()
         .unwrap_or(Path::new("/"))
@@ -375,25 +421,54 @@ pub fn command_restore(tarball_path: &str) -> Result<(), String> {
         .to_string_lossy()
         .to_string();
 
-    let status = Command::new(&busybox)
-        .arg0("busybox")
-        .arg("tar")
-        .args([
-            "-x",
-            "--auto-compress",
-            "--recursive-unlink",
-            "--preserve-permissions",
-            "-f",
-            tarball_path,
-            "-C",
-            &parent_plugins,
-            &format!("{}/", plugins_basename),
-            "-C",
-            &parent_rootfs,
-            &format!("{}/", rootfs_basename),
-        ])
-        .status()
-        .map_err(|e| format!("exec tar: {}", e))?;
+    let status = if contains_oci {
+        let parent_containers = Path::new(&oci_containers_dir)
+            .parent()
+            .unwrap_or(Path::new("/"))
+            .to_string_lossy()
+            .to_string();
+        let containers_basename = Path::new(&oci_containers_dir)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        Command::new(&busybox)
+            .arg0("busybox")
+            .arg("tar")
+            .args([
+                "-x",
+                "--auto-compress",
+                "--recursive-unlink",
+                "--preserve-permissions",
+                "-f",
+                tarball_path,
+                "-C",
+                &parent_containers,
+                &format!("{}/", containers_basename),
+            ])
+            .status()
+            .map_err(|e| format!("exec tar: {}", e))?
+    } else {
+        Command::new(&busybox)
+            .arg0("busybox")
+            .arg("tar")
+            .args([
+                "-x",
+                "--auto-compress",
+                "--recursive-unlink",
+                "--preserve-permissions",
+                "-f",
+                tarball_path,
+                "-C",
+                &parent_plugins,
+                &format!("{}/", plugins_basename),
+                "-C",
+                &parent_rootfs,
+                &format!("{}/", rootfs_basename),
+            ])
+            .status()
+            .map_err(|e| format!("exec tar: {}", e))?
+    };
 
     if !status.success() {
         msg_error("Restore failed.");
@@ -501,13 +576,11 @@ pub fn command_rename(old_alias: &str, new_alias: &str) -> Result<(), String> {
 }
 
 pub fn command_copy(src: &str, dst: &str) -> Result<(), String> {
-    let installed_rootfs_dir = get_installed_rootfs_dir();
-
     let (src_dist, src_path) = parse_dist_path(src);
     let (dst_dist, dst_path) = parse_dist_path(dst);
 
-    let src_full = resolve_path(&installed_rootfs_dir, src_dist.as_deref(), &src_path)?;
-    let dst_full = resolve_path(&installed_rootfs_dir, dst_dist.as_deref(), &dst_path)?;
+    let src_full = resolve_path(src_dist.as_deref(), &src_path)?;
+    let dst_full = resolve_path(dst_dist.as_deref(), &dst_path)?;
 
     if !Path::new(&src_full).exists() {
         msg_error(&format!(
@@ -556,17 +629,12 @@ fn parse_dist_path(input: &str) -> (Option<String>, String) {
     (None, input.to_string())
 }
 
-fn resolve_path(
-    installed_rootfs_dir: &str,
-    dist: Option<&str>,
-    path: &str,
-) -> Result<String, String> {
+fn resolve_path(dist: Option<&str>, path: &str) -> Result<String, String> {
     if let Some(d) = dist {
-        let rootfs = format!("{}/{}", installed_rootfs_dir, d);
-        if !Path::new(&rootfs).is_dir() {
+        let Some((rootfs, _source_type)) = resolve_installed_rootfs(d) else {
             msg_error(&format!("distribution '{}' is not installed.", d));
             return Err("distro not installed".to_string());
-        }
+        };
         let full = format!("{}/{}", rootfs, path);
         let canonical = Path::new(&full)
             .canonicalize()

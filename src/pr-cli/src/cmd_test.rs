@@ -293,7 +293,10 @@ fn run_test_binary(rootfs: &str, suite: &str) -> Result<TapResult, String> {
 }
 
 pub fn command_test(distro: &str, suite: Option<&str>, verbose: bool) -> Result<(), String> {
-    let rootfs = format!("{}/{}", get_installed_rootfs_dir(), distro);
+    let Some((rootfs, _source_type)) = resolve_installed_rootfs(distro) else {
+        msg_error(&format!("distribution '{}' is not installed.", distro));
+        return Err("not installed".to_string());
+    };
 
     if !Path::new(&rootfs).is_dir() {
         msg_error(&format!("distribution '{}' is not installed.", distro));

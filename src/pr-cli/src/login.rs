@@ -101,13 +101,14 @@ pub fn command_login(
     custom_bind: &[String],
     extra_args: &[String],
 ) -> Result<(), String> {
-    let installed_rootfs_dir = get_installed_rootfs_dir();
-    let rootfs = format!("{}/{}", installed_rootfs_dir, distro_name);
-
-    if !Path::new(&rootfs).is_dir() {
+    let Some((rootfs, _source_type)) = resolve_installed_rootfs(distro_name) else {
         println!();
         msg_error(&format!("distribution '{}' is not installed.", distro_name));
         println!();
+        return Err("not installed".to_string());
+    };
+
+    if !Path::new(&rootfs).is_dir() {
         return Err("not installed".to_string());
     }
 
