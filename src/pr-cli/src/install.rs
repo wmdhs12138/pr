@@ -1459,6 +1459,7 @@ pub fn command_install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1679,5 +1680,137 @@ mod tests {
         assert!(rootfs.join("sys/.empty").is_dir());
 
         let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn validate_alias_format_accepts_and_rejects_expected_values() {
+        assert!(validate_alias_format("debian").is_ok());
+        assert!(validate_alias_format("Ubuntu_24.04+custom").is_ok());
+
+        assert!(validate_alias_format("").is_err());
+        assert!(validate_alias_format(".hidden").is_err());
+        assert!(validate_alias_format("bad/name").is_err());
+        assert!(validate_alias_format("bad\\name").is_err());
+        assert!(validate_alias_format("bad..name").is_err());
+        assert!(validate_alias_format("name.sh").is_err());
+        assert!(validate_alias_format("name with space").is_err());
+    }
+
+    #[test]
+    fn resolve_oci_reference_rejects_invalid_inputs() {
+        assert!(resolve_oci_reference("").is_err());
+        assert!(resolve_oci_reference("   ").is_err());
+        assert!(resolve_oci_reference("@sha256:abc").is_err());
+        assert!(resolve_oci_reference("repo@").is_err());
+        assert!(resolve_oci_reference("repo:").is_err());
+    }
+
+    #[test]
+    fn resolves_index_docker_io_host_to_registry_1() {
+        let resolved =
+            resolve_oci_reference("index.docker.io/library/alpine:3.20").expect("resolve");
+        assert_eq!(resolved.registry_base, "https://registry-1.docker.io");
+        assert_eq!(resolved.repository, "library/alpine");
+        assert_eq!(resolved.reference, "3.20");
+    }
+
+    #[test]
+    fn derive_oci_install_name_uses_valid_override_alias() {
+        let resolved = ResolvedOciReference {
+            registry_base: "https://ghcr.io".to_string(),
+            repository: "example/app".to_string(),
+            reference: "latest".to_string(),
+            digest_reference: false,
+        };
+        let alias =
+            derive_oci_install_name(&resolved, Some("custom.alias-1")).expect("derive alias");
+        assert_eq!(alias, "custom.alias-1");
+    }
+
+    #[test]
+    fn append_line_if_missing_is_idempotent_and_preserves_newlines() {
+        let tmp_dir = unique_temp_dir("pr-cli-append-line");
+        fs::create_dir_all(&tmp_dir).expect("create temp dir");
+        let file_path = tmp_dir.join("config.txt");
+        fs::write(&file_path, "first=line").expect("seed file");
+
+        append_line_if_missing(&file_path, "session required pam_env.so")
+            .expect("append first time");
+        append_line_if_missing(&file_path, "session required pam_env.so")
+            .expect("append second time");
+
+        let content = fs::read_to_string(&file_path).expect("read file");
+        let expected = "first=line\nsession required pam_env.so\n";
+        assert_eq!(content, expected);
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn fix_elf_execute_bits_sets_exec_for_elf_files_only() {
+        let tmp_dir = unique_temp_dir("pr-cli-fix-elf");
+        fs::create_dir_all(&tmp_dir).expect("create temp dir");
+        let elf_path = tmp_dir.join("tool");
+        let txt_path = tmp_dir.join("note.txt");
+
+        fs::write(&elf_path, b"\x7fELF\x02\x01\x01\x00dummy").expect("write elf");
+        fs::write(&txt_path, b"plain text").expect("write txt");
+        fs::set_permissions(&elf_path, fs::Permissions::from_mode(0o644)).expect("chmod elf");
+        fs::set_permissions(&txt_path, fs::Permissions::from_mode(0o644)).expect("chmod txt");
+
+        fix_elf_execute_bits(tmp_dir.to_str().expect("tmp path"));
+
+        let elf_mode = fs::metadata(&elf_path).expect("elf metadata").permissions().mode();
+        let txt_mode = fs::metadata(&txt_path).expect("txt metadata").permissions().mode();
+        assert_ne!(elf_mode & 0o111, 0);
+        assert_eq!(txt_mode & 0o111, 0);
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn cleanup_oci_on_failure_ignores_unsafe_paths() {
+        let _prev_prefix = std::env::var("APP_PREFIX").ok();
+        let tmp_dir = unique_temp_dir("pr-cli-cleanup-oci");
+        let prefix = tmp_dir.join("usr");
+        let containers_root = prefix.join("var/lib/proot-distro/containers");
+        fs::create_dir_all(&containers_root).expect("create containers root");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let outside = tmp_dir.join("outside/debian");
+        fs::create_dir_all(&outside).expect("create outside dir");
+        cleanup_oci_on_failure(&outside);
+        assert!(outside.exists());
+
+        let invalid_leaf = containers_root.join(".bad");
+        fs::create_dir_all(&invalid_leaf).expect("create invalid alias dir");
+        cleanup_oci_on_failure(&invalid_leaf);
+        assert!(invalid_leaf.exists());
+
+        if let Some(prev) = _prev_prefix {
+            std::env::set_var("APP_PREFIX", prev);
+        } else {
+            std::env::remove_var("APP_PREFIX");
+        }
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_install_rejects_tarball_overrides_for_oci_source() {
+        let err = command_install(
+            "docker.io/library/alpine:latest",
+            None,
+            Some("https://example.invalid/rootfs.tar.xz"),
+            None,
+        )
+        .expect_err("must reject tarball overrides for OCI installs");
+        assert!(err.contains("not supported for OCI image installs"));
+    }
+
+    #[test]
+    fn command_install_rejects_invalid_override_alias_before_plugin_checks() {
+        let err = command_install("debian", Some("../escape"), None, None)
+            .expect_err("must reject invalid alias");
+        assert!(err.contains("--override-alias"));
     }
 }
