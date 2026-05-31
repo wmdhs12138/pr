@@ -172,10 +172,17 @@ fun DistroListScreen(app: App) {
                         val source = customImageRef.trim()
                         if (source.isEmpty()) return@CustomImageInstallCard
                         val alias = customAlias.trim()
-                        val command = if (alias.isEmpty()) {
-                            "install $source"
-                        } else {
-                            "install $source --override-alias $alias"
+                        if (alias.isNotEmpty() && !isValidOverrideAlias(alias)) {
+                            showOutput = true
+                            outputLines = listOf(
+                                "ERROR: Invalid alias '$alias'.",
+                                "Alias must start with an alphanumeric character and use only [A-Za-z0-9_.+-]."
+                            )
+                            return@CustomImageInstallCard
+                        }
+                        val args = mutableListOf("install", source)
+                        if (alias.isNotEmpty()) {
+                            args += listOf("--override-alias", alias)
                         }
                         loadingDistro = "__custom__"
                         operationLabel = "Installing"
@@ -183,7 +190,7 @@ fun DistroListScreen(app: App) {
                         showOutput = true
                         outputLines = listOf("Installing $source…")
                         scope.launch {
-                            runDistroCommand(app, command) { line ->
+                            runDistroCommand(app, args) { line ->
                                 outputLines = outputLines + line
                             }
                             loadingDistro = null
@@ -205,7 +212,12 @@ fun DistroListScreen(app: App) {
                             scope.launch {
                                 runDistroCommand(
                                     app,
-                                    "install ${distro.installSource} --override-alias ${distro.alias}"
+                                    listOf(
+                                        "install",
+                                        distro.installSource,
+                                        "--override-alias",
+                                        distro.alias
+                                    )
                                 ) { line ->
                                     outputLines = outputLines + line
                                 }
@@ -228,7 +240,7 @@ fun DistroListScreen(app: App) {
                             showOutput = true
                             outputLines = listOf("Removing ${distro.displayName}…")
                             scope.launch {
-                                runDistroCommand(app, "remove ${distro.alias}") { line ->
+                                runDistroCommand(app, listOf("remove", distro.alias)) { line ->
                                     outputLines = outputLines + line
                                 }
                                 loadingDistro = null
@@ -243,7 +255,7 @@ fun DistroListScreen(app: App) {
                             showOutput = true
                             outputLines = listOf("Testing ${distro.displayName}…")
                             scope.launch {
-                                runDistroCommand(app, "test ${distro.alias}") { line ->
+                                runDistroCommand(app, listOf("test", distro.alias)) { line ->
                                     outputLines = outputLines + line
                                 }
                                 loadingDistro = null
@@ -561,7 +573,7 @@ fun OutputConsoleContent(
 
 private suspend fun runDistroCommand(
     app: App,
-    command: String,
+    args: List<String>,
     onLine: (String) -> Unit
 ) = withContext(Dispatchers.IO) {
     val binDir = File(app.prefixDir, "bin")
@@ -579,7 +591,7 @@ private suspend fun runDistroCommand(
     )
 
     val prCli = File(binDir, "pr-cli").absolutePath
-    val cmd = arrayOf(prCli, *command.split(" ").toTypedArray())
+    val cmd = arrayOf(prCli, *args.toTypedArray())
 
     android.util.Log.d("PR", "Running: ${cmd.joinToString(" ")}")
     val pb = ProcessBuilder(*cmd)
@@ -615,4 +627,18 @@ private suspend fun runDistroCommand(
     } catch (e: Exception) {
         withContext(Dispatchers.Main) { onLine("ERROR: ${e.message}") }
     }
+}
+
+private fun isValidOverrideAlias(alias: String): Boolean {
+    if (alias.isEmpty() || alias.endsWith(".sh")) {
+        return false
+    }
+    if (alias.contains('/') || alias.contains('\\') || alias.contains("..")) {
+        return false
+    }
+    val first = alias.firstOrNull() ?: return false
+    if (!first.isLetterOrDigit()) {
+        return false
+    }
+    return alias.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '+' || it == '-' }
 }
