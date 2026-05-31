@@ -489,7 +489,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-cmd-test-unknown-suite");
         let prefix = tmp_dir.join("usr");
-        let legacy_rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let legacy_rootfs = prefix.join("var/lib/pr/installed-rootfs/debian");
         fs::create_dir_all(&legacy_rootfs).expect("create installed rootfs");
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
 
@@ -569,7 +569,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-cmd-test-rootfs-file");
         let prefix = tmp_dir.join("usr");
-        let rootfs_file = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let rootfs_file = prefix.join("var/lib/pr/installed-rootfs/debian");
         fs::create_dir_all(rootfs_file.parent().expect("parent")).expect("create parent");
         fs::write(&rootfs_file, b"not a directory").expect("write file");
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());

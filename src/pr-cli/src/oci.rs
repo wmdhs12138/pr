@@ -386,6 +386,7 @@ fn apply_layer_tar_stream(reader: Box<dyn Read>, rootfs: &Path) -> Result<(), St
     archive.set_preserve_permissions(true);
     archive.set_preserve_mtime(true);
     let mut created_paths: HashSet<PathBuf> = HashSet::new();
+    let mut pending_hardlinks: Vec<(PathBuf, PathBuf)> = Vec::new();
 
     for entry in archive
         .entries()
@@ -404,6 +405,22 @@ fn apply_layer_tar_stream(reader: Box<dyn Read>, rootfs: &Path) -> Result<(), St
             continue;
         }
 
+        if entry.header().entry_type().is_hard_link() {
+            let link_name = entry
+                .link_name()
+                .map_err(|e| format!("read hardlink target {}: {}", relative_path.display(), e))?
+                .ok_or_else(|| format!("hardlink {} missing link target", relative_path.display()))?;
+            let link_target = sanitize_layer_path(&link_name)?;
+            if link_target.as_os_str().is_empty() {
+                return Err(format!(
+                    "hardlink {} has empty link target",
+                    relative_path.display()
+                ));
+            }
+            pending_hardlinks.push((relative_path, link_target));
+            continue;
+        }
+
         let within_root = entry
             .unpack_in(rootfs)
             .map_err(|e| format!("extract {}: {}", relative_path.display(), e))?;
@@ -415,6 +432,66 @@ fn apply_layer_tar_stream(reader: Box<dyn Read>, rootfs: &Path) -> Result<(), St
         }
 
         created_paths.insert(rootfs.join(&relative_path));
+    }
+
+    while !pending_hardlinks.is_empty() {
+        let mut remaining: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut progressed = false;
+
+        for (relative_path, link_target) in pending_hardlinks {
+            let source = rootfs.join(&link_target);
+            if !source.exists() {
+                remaining.push((relative_path, link_target));
+                continue;
+            }
+
+            let destination = rootfs.join(&relative_path);
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("create hardlink parent {}: {}", parent.display(), e))?;
+            }
+            remove_path_if_exists(&destination)?;
+            if let Err(err) = fs::hard_link(&source, &destination) {
+                let fallback_allowed = matches!(
+                    err.kind(),
+                    std::io::ErrorKind::PermissionDenied
+                        | std::io::ErrorKind::CrossesDevices
+                        | std::io::ErrorKind::Unsupported
+                );
+                if !fallback_allowed {
+                    return Err(format!(
+                        "extract {}: create hardlink to {}: {}",
+                        relative_path.display(),
+                        link_target.display(),
+                        err
+                    ));
+                }
+
+                fs::copy(&source, &destination).map_err(|copy_err| {
+                    format!(
+                        "extract {}: copy fallback for hardlink {} failed: {}",
+                        relative_path.display(),
+                        link_target.display(),
+                        copy_err
+                    )
+                })?;
+                if let Ok(metadata) = fs::metadata(&source) {
+                    let _ = fs::set_permissions(&destination, metadata.permissions());
+                }
+            }
+            created_paths.insert(destination);
+            progressed = true;
+        }
+
+        if !progressed {
+            let (relative_path, link_target) = &remaining[0];
+            return Err(format!(
+                "extract {}: hardlink target missing {}",
+                relative_path.display(),
+                link_target.display()
+            ));
+        }
+        pending_hardlinks = remaining;
     }
 
     Ok(())
@@ -613,6 +690,32 @@ mod tests {
                     .expect("append whiteout");
             }
         }
+        builder.finish().expect("finish tar");
+    }
+
+    fn write_layer_tar_with_hardlink_before_target(path: &Path) {
+        let file = fs::File::create(path).expect("create tar");
+        let mut builder = tar::Builder::new(file);
+
+        let mut hardlink = tar::Header::new_gnu();
+        hardlink.set_entry_type(tar::EntryType::Link);
+        hardlink.set_mode(0o755);
+        hardlink.set_size(0);
+        hardlink.set_cksum();
+        builder
+            .append_link(&mut hardlink, "usr/bin/perl5.38.2", "usr/bin/perl")
+            .expect("append hardlink");
+
+        let mut target = tar::Header::new_gnu();
+        let content = b"#!/bin/sh\nexit 0\n";
+        target.set_entry_type(tar::EntryType::Regular);
+        target.set_mode(0o755);
+        target.set_size(content.len() as u64);
+        target.set_cksum();
+        builder
+            .append_data(&mut target, "usr/bin/perl", &content[..])
+            .expect("append target file");
+
         builder.finish().expect("finish tar");
     }
 
@@ -818,6 +921,23 @@ mod tests {
             b"new"
         );
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn applies_layer_with_hardlink_declared_before_target() {
+        let tmp = unique_tmp_dir("oci-hardlink-before-target");
+        let layer = tmp.join("layer.tar");
+        let rootfs = tmp.join("rootfs");
+        fs::create_dir_all(&rootfs).expect("create rootfs");
+        write_layer_tar_with_hardlink_before_target(&layer);
+
+        apply_layer_blob(&layer, &rootfs).expect("apply layer blob");
+
+        let target = fs::read(rootfs.join("usr/bin/perl")).expect("read target");
+        let hardlink = fs::read(rootfs.join("usr/bin/perl5.38.2")).expect("read hardlink");
+        assert_eq!(target, hardlink);
+
+        let _ = fs::remove_dir_all(tmp);
     }
 
     #[test]

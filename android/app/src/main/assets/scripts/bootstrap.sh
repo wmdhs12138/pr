@@ -23,9 +23,9 @@ log() {
 
 create_directories() {
     log "Creating directory structure..."
-    mkdir -p "${APP_PREFIX}/etc/proot-distro"
-    mkdir -p "${APP_PREFIX}/var/lib/proot-distro/installed-rootfs"
-    mkdir -p "${APP_PREFIX}/var/lib/proot-distro/dlcache"
+    mkdir -p "${APP_PREFIX}/etc/pr"
+    mkdir -p "${APP_PREFIX}/var/lib/pr/installed-rootfs"
+    mkdir -p "${APP_PREFIX}/var/lib/pr/dlcache"
     mkdir -p "${APP_HOME}"
     mkdir -p "${APP_PREFIX}/tmp"
 }

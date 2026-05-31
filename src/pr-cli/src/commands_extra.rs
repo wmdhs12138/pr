@@ -723,7 +723,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-commands-extra-clear-files");
         let prefix = tmp_dir.join("usr");
-        let cache_dir = prefix.join("var/lib/proot-distro/dlcache");
+        let cache_dir = prefix.join("var/lib/pr/dlcache");
         fs::create_dir_all(&cache_dir).expect("create cache dir");
         fs::write(cache_dir.join("one.tar.xz"), b"a").expect("write cache file");
         fs::write(cache_dir.join("two.tar.xz"), b"bb").expect("write cache file");
@@ -746,7 +746,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-commands-extra-backup-no-output");
         let prefix = tmp_dir.join("usr");
-        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let rootfs = prefix.join("var/lib/pr/installed-rootfs/debian");
         fs::create_dir_all(&rootfs).expect("create installed rootfs");
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
 
@@ -762,7 +762,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-commands-extra-backup-output-dir");
         let prefix = tmp_dir.join("usr");
-        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let rootfs = prefix.join("var/lib/pr/installed-rootfs/debian");
         let out_dir = tmp_dir.join("output-dir");
         fs::create_dir_all(&rootfs).expect("create installed rootfs");
         fs::create_dir_all(&out_dir).expect("create output dir");
@@ -906,7 +906,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-commands-extra-backup-existing-file");
         let prefix = tmp_dir.join("usr");
-        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let rootfs = prefix.join("var/lib/pr/installed-rootfs/debian");
         let output = tmp_dir.join("backup.tar.xz");
         fs::create_dir_all(&rootfs).expect("create installed rootfs");
         fs::write(&output, b"exists").expect("create output file");
@@ -949,7 +949,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-commands-extra-rename-unknown");
         let prefix = tmp_dir.join("usr");
-        fs::create_dir_all(prefix.join("etc/proot-distro")).expect("create plugins dir");
+        fs::create_dir_all(prefix.join("etc/pr")).expect("create plugins dir");
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
 
         let err = command_rename("debian", "debian-new")
@@ -965,7 +965,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-commands-extra-rename-not-installed");
         let prefix = tmp_dir.join("usr");
-        let plugins_dir = prefix.join("etc/proot-distro");
+        let plugins_dir = prefix.join("etc/pr");
         fs::create_dir_all(&plugins_dir).expect("create plugins dir");
         fs::write(
             plugins_dir.join("debian.sh"),
@@ -1017,7 +1017,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-commands-extra-resolve-installed");
         let prefix = tmp_dir.join("usr");
-        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let rootfs = prefix.join("var/lib/pr/installed-rootfs/debian");
         fs::create_dir_all(rootfs.join("etc")).expect("create rootfs etc");
         fs::write(rootfs.join("etc/os-release"), "NAME=Debian\n").expect("write os-release");
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());

@@ -45,15 +45,31 @@ private data class DistroCatalogEntry(
     val installSource: String,
 )
 
+private data class OciImageSuggestion(
+    val title: String,
+    val imageRef: String,
+    val alias: String,
+)
+
 private val DISTRO_CATALOG = listOf(
     DistroCatalogEntry("alpine", "alpine:3.20", "docker.io/library/alpine:3.20"),
     DistroCatalogEntry("archlinux", "Arch Linux", "docker.io/library/archlinux:latest"),
-    DistroCatalogEntry("debian", "Debian", "docker.io/library/debian:stable"),
+    DistroCatalogEntry("debian", "debian:stable", "docker.io/library/debian:stable"),
+    DistroCatalogEntry("debian-testing", "debian:testing", "docker.io/library/debian:testing"),
     DistroCatalogEntry("fedora", "Fedora", "registry.fedoraproject.org/fedora:latest"),
     DistroCatalogEntry("manjaro", "Manjaro", "docker.io/manjarolinux/base:latest"),
     DistroCatalogEntry("opensuse", "openSUSE", "registry.opensuse.org/opensuse/tumbleweed:latest"),
     DistroCatalogEntry("rockylinux", "Rocky Linux", "docker.io/library/rockylinux:latest"),
-    DistroCatalogEntry("ubuntu", "ubuntu:24.04", "docker.io/library/ubuntu:24.04"),
+    DistroCatalogEntry("ubuntu", "ubuntu:latest", "docker.io/library/ubuntu:latest"),
+)
+
+private val OCI_IMAGE_SUGGESTIONS = listOf(
+    OciImageSuggestion("Alpine 3.20", "docker.io/library/alpine:3.20", "alpine"),
+    OciImageSuggestion("Ubuntu Latest", "docker.io/library/ubuntu:latest", "ubuntu"),
+    OciImageSuggestion("Debian Stable", "docker.io/library/debian:stable", "debian"),
+    OciImageSuggestion("Debian Testing", "docker.io/library/debian:testing", "debian-testing"),
+    OciImageSuggestion("Fedora Latest", "registry.fedoraproject.org/fedora:latest", "fedora"),
+    OciImageSuggestion("Arch Linux", "docker.io/library/archlinux:latest", "archlinux"),
 )
 
 private fun listDirectories(parent: File): List<String> {
@@ -109,8 +125,8 @@ fun DistroListScreen(app: App) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     fun refreshDistros() {
-        val legacyRootfsDir = File(app.prefixDir, "var/lib/proot-distro/installed-rootfs")
-        val ociContainersDir = File(app.prefixDir, "var/lib/proot-distro/containers")
+        val legacyRootfsDir = File(app.prefixDir, "var/lib/pr/installed-rootfs")
+        val ociContainersDir = File(app.prefixDir, "var/lib/pr/containers")
         val installedAliases = mutableSetOf<String>()
         installedAliases.addAll(listDirectories(legacyRootfsDir))
         for (alias in listDirectories(ociContainersDir)) {
@@ -311,6 +327,8 @@ fun CustomImageInstallCard(
     onAliasChange: (String) -> Unit,
     onInstall: () -> Unit,
 ) {
+    var showSuggestions by remember { mutableStateOf(false) }
+
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -321,11 +339,20 @@ fun CustomImageInstallCard(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            Text(
-                text = "Custom OCI image",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Custom OCI image",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                TextButton(onClick = { showSuggestions = true }) {
+                    Text("ℹ️ Images")
+                }
+            }
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = imageRef,
@@ -359,6 +386,46 @@ fun CustomImageInstallCard(
                 Text("Install")
             }
         }
+    }
+
+    if (showSuggestions) {
+        AlertDialog(
+            onDismissRequest = { showSuggestions = false },
+            title = { Text("Choose OCI image") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    for (item in OCI_IMAGE_SUGGESTIONS) {
+                        OutlinedButton(
+                            onClick = {
+                                onImageRefChange(item.imageRef)
+                                onAliasChange(item.alias)
+                                showSuggestions = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.Start
+                            ) {
+                                Text(item.title, fontWeight = FontWeight.Medium)
+                                Text(item.imageRef, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSuggestions = false }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 }
 

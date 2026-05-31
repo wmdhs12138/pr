@@ -333,7 +333,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-login-no-passwd");
         let prefix = tmp_dir.join("usr");
-        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let rootfs = prefix.join("var/lib/pr/installed-rootfs/debian");
         fs::create_dir_all(&rootfs).expect("create rootfs");
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
 
@@ -350,7 +350,7 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let tmp_dir = unique_temp_dir("pr-cli-login-missing-user");
         let prefix = tmp_dir.join("usr");
-        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let rootfs = prefix.join("var/lib/pr/installed-rootfs/debian");
         let etc = rootfs.join("etc");
         fs::create_dir_all(&etc).expect("create etc");
         fs::write(etc.join("passwd"), "root:x:0:0:root:/root:/bin/sh\n").expect("write passwd");

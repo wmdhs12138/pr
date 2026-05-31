@@ -48,7 +48,7 @@ class App : Application() {
 
         try {
             val binDir = File(prefixDir, "bin")
-            val etcDir = File(prefixDir, "etc/proot-distro")
+            val etcDir = File(prefixDir, "etc/pr")
 
             binDir.mkdirs()
             etcDir.mkdirs()

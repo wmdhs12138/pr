@@ -1777,7 +1777,7 @@ mod tests {
         let _prev_prefix = std::env::var("APP_PREFIX").ok();
         let tmp_dir = unique_temp_dir("pr-cli-cleanup-oci");
         let prefix = tmp_dir.join("usr");
-        let containers_root = prefix.join("var/lib/proot-distro/containers");
+        let containers_root = prefix.join("var/lib/pr/containers");
         fs::create_dir_all(&containers_root).expect("create containers root");
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
 

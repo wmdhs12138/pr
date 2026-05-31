@@ -23,8 +23,8 @@ APP_HOME="${APP_HOME:-/data/data/id.or.oo.pr/files/home}"
 APP_PACKAGE="${APP_PACKAGE:-id.or.oo.pr}"
 
 BIN_DIR="${APP_PREFIX}/bin"
-ETC_DIR="${APP_PREFIX}/etc/proot-distro"
-VAR_DIR="${APP_PREFIX}/var/lib/proot-distro"
+ETC_DIR="${APP_PREFIX}/etc/pr"
+VAR_DIR="${APP_PREFIX}/var/lib/pr"
 
 MARKER="${APP_PREFIX}/.bootstrapped"
 

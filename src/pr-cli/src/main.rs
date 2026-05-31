@@ -465,9 +465,9 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let base = unique_temp_dir("pr-cli-is-installed");
         let prefix = base.join("usr");
-        fs::create_dir_all(prefix.join("var/lib/proot-distro/installed-rootfs/debian"))
+        fs::create_dir_all(prefix.join("var/lib/pr/installed-rootfs/debian"))
             .expect("create legacy rootfs");
-        fs::create_dir_all(prefix.join("var/lib/proot-distro/containers/ubuntu/rootfs"))
+        fs::create_dir_all(prefix.join("var/lib/pr/containers/ubuntu/rootfs"))
             .expect("create oci rootfs");
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
 
@@ -484,9 +484,9 @@ mod tests {
         let _guard = env_lock().lock().expect("lock env");
         let base = unique_temp_dir("pr-cli-collect-installed");
         let prefix = base.join("usr");
-        fs::create_dir_all(prefix.join("var/lib/proot-distro/installed-rootfs/debian"))
+        fs::create_dir_all(prefix.join("var/lib/pr/installed-rootfs/debian"))
             .expect("create legacy rootfs");
-        fs::create_dir_all(prefix.join("var/lib/proot-distro/containers/ubuntu/rootfs"))
+        fs::create_dir_all(prefix.join("var/lib/pr/containers/ubuntu/rootfs"))
             .expect("create oci rootfs");
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
 

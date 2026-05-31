@@ -29,15 +29,15 @@ pub fn get_bin_dir() -> String {
 }
 
 pub fn get_plugins_dir() -> String {
-    format!("{}/etc/proot-distro", get_prefix())
+    format!("{}/etc/pr", get_prefix())
 }
 
 pub fn get_installed_rootfs_dir() -> String {
-    format!("{}/var/lib/proot-distro/installed-rootfs", get_prefix())
+    format!("{}/var/lib/pr/installed-rootfs", get_prefix())
 }
 
 fn get_oci_containers_dir_for_prefix(prefix: &str) -> String {
-    format!("{}/var/lib/proot-distro/containers", prefix)
+    format!("{}/var/lib/pr/containers", prefix)
 }
 
 fn get_oci_container_dir_for_prefix(prefix: &str, name: &str) -> String {
@@ -83,7 +83,7 @@ pub fn resolve_installed_rootfs(name: &str) -> Option<(String, InstalledSourceTy
 }
 
 pub fn get_download_cache_dir() -> String {
-    format!("{}/var/lib/proot-distro/dlcache", get_prefix())
+    format!("{}/var/lib/pr/dlcache", get_prefix())
 }
 
 pub fn get_default_path_env() -> String {
@@ -369,19 +369,19 @@ mod tests {
 
         assert_eq!(
             get_oci_containers_dir_for_prefix(prefix),
-            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers"
+            "/data/data/id.or.oo.pr/files/usr/var/lib/pr/containers"
         );
         assert_eq!(
             get_oci_container_dir_for_prefix(prefix, name),
-            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian"
+            "/data/data/id.or.oo.pr/files/usr/var/lib/pr/containers/debian"
         );
         assert_eq!(
             get_oci_container_rootfs_dir_for_prefix(prefix, name),
-            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian/rootfs"
+            "/data/data/id.or.oo.pr/files/usr/var/lib/pr/containers/debian/rootfs"
         );
         assert_eq!(
             get_oci_container_manifest_path_for_prefix(prefix, name),
-            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian/manifest.json"
+            "/data/data/id.or.oo.pr/files/usr/var/lib/pr/containers/debian/manifest.json"
         );
     }
 
@@ -391,9 +391,9 @@ mod tests {
         let base = unique_temp_dir("pr-cli-shared-rootfs");
         let prefix = base.join("usr");
         let legacy = prefix
-            .join("var/lib/proot-distro/installed-rootfs/debian");
+            .join("var/lib/pr/installed-rootfs/debian");
         let oci_rootfs = prefix
-            .join("var/lib/proot-distro/containers/debian/rootfs");
+            .join("var/lib/pr/containers/debian/rootfs");
         fs::create_dir_all(&legacy).expect("create legacy rootfs");
         fs::create_dir_all(&oci_rootfs).expect("create oci rootfs");
 
@@ -479,31 +479,31 @@ mod tests {
         let prefix_str = prefix.to_string_lossy().to_string();
         assert_eq!(get_prefix(), prefix_str);
         assert_eq!(get_bin_dir(), format!("{}/bin", prefix_str));
-        assert_eq!(get_plugins_dir(), format!("{}/etc/proot-distro", prefix_str));
+        assert_eq!(get_plugins_dir(), format!("{}/etc/pr", prefix_str));
         assert_eq!(
             get_installed_rootfs_dir(),
-            format!("{}/var/lib/proot-distro/installed-rootfs", prefix_str)
+            format!("{}/var/lib/pr/installed-rootfs", prefix_str)
         );
         assert_eq!(
             get_download_cache_dir(),
-            format!("{}/var/lib/proot-distro/dlcache", prefix_str)
+            format!("{}/var/lib/pr/dlcache", prefix_str)
         );
         assert_eq!(get_default_path_env(), format!("{}:{}", DEFAULT_PATH_ENV_SUFFIX, prefix_str));
         assert_eq!(
             get_oci_containers_dir(),
-            format!("{}/var/lib/proot-distro/containers", prefix_str)
+            format!("{}/var/lib/pr/containers", prefix_str)
         );
         assert_eq!(
             get_oci_container_dir("debian"),
-            format!("{}/var/lib/proot-distro/containers/debian", prefix_str)
+            format!("{}/var/lib/pr/containers/debian", prefix_str)
         );
         assert_eq!(
             get_oci_container_rootfs_dir("debian"),
-            format!("{}/var/lib/proot-distro/containers/debian/rootfs", prefix_str)
+            format!("{}/var/lib/pr/containers/debian/rootfs", prefix_str)
         );
         assert_eq!(
             get_oci_container_manifest_path("debian"),
-            format!("{}/var/lib/proot-distro/containers/debian/manifest.json", prefix_str)
+            format!("{}/var/lib/pr/containers/debian/manifest.json", prefix_str)
         );
 
         std::env::remove_var("APP_PREFIX");
@@ -524,7 +524,7 @@ mod tests {
         let base = unique_temp_dir("pr-cli-shared-rootfs-oci");
         let prefix = base.join("usr");
         let oci_rootfs = prefix
-            .join("var/lib/proot-distro/containers/debian/rootfs");
+            .join("var/lib/pr/containers/debian/rootfs");
         fs::create_dir_all(&oci_rootfs).expect("create oci rootfs");
 
         std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());

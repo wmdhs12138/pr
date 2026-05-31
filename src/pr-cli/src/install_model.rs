@@ -201,9 +201,9 @@ mod tests {
         };
         let descriptor = InstallDescriptor::legacy_plugin(
             "Alpine Linux",
-            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/installed-rootfs/alpine",
+            "/data/data/id.or.oo.pr/files/usr/var/lib/pr/installed-rootfs/alpine",
             "alpine",
-            "/data/data/id.or.oo.pr/files/usr/share/proot-distro/plugins/alpine.sh",
+            "/data/data/id.or.oo.pr/files/usr/share/pr/plugins/alpine.sh",
             "aarch64",
         );
 
@@ -214,13 +214,13 @@ mod tests {
         assert_eq!(descriptor.metadata_path(), None);
         assert_eq!(
             descriptor.source.source_path(),
-            Some(Path::new("/data/data/id.or.oo.pr/files/usr/share/proot-distro/plugins/alpine.sh"))
+            Some(Path::new("/data/data/id.or.oo.pr/files/usr/share/pr/plugins/alpine.sh"))
         );
 
         let converted = InstallDescriptor::from_legacy_plugin(
             &plugin,
-            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/installed-rootfs/alpine",
-            "/data/data/id.or.oo.pr/files/usr/share/proot-distro/plugins/alpine.sh",
+            "/data/data/id.or.oo.pr/files/usr/var/lib/pr/installed-rootfs/alpine",
+            "/data/data/id.or.oo.pr/files/usr/share/pr/plugins/alpine.sh",
             "aarch64",
         );
         assert_eq!(converted.name, "Alpine Linux");
@@ -231,8 +231,8 @@ mod tests {
     fn oci_descriptor_exposes_common_fields() {
         let descriptor = InstallDescriptor::oci_image(
             "Debian",
-            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian/rootfs",
-            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian/manifest.json",
+            "/data/data/id.or.oo.pr/files/usr/var/lib/pr/containers/debian/rootfs",
+            "/data/data/id.or.oo.pr/files/usr/var/lib/pr/containers/debian/manifest.json",
             "docker.io/library/debian:stable",
             Some("arm64".to_string()),
         );
@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(
             descriptor.metadata_path(),
             Some(Path::new(
-                "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian/manifest.json"
+                "/data/data/id.or.oo.pr/files/usr/var/lib/pr/containers/debian/manifest.json"
             ))
         );
     }
