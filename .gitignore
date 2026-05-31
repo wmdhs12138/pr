@@ -12,7 +12,7 @@ build/
 out/
 local/
 
-.opencode/node_modules/
+.opencode/
 
 android/.gradle/
 android/build/
