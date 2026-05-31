@@ -8,12 +8,12 @@
 
 ## 2. CLI command migration
 
-- [ ] 2.1 Refactor `install` to support OCI-backed installs while preserving Android-specific guest setup
-- [ ] 2.2 Refactor `list` to enumerate both legacy installs and OCI-backed containers
-- [ ] 2.3 Refactor `login`, `remove`, `reset`, `copy`, `backup`, `restore`, and `test` to branch on install source type
-- [ ] 2.4 Persist and load OCI install metadata through `manifest.json`
-- [ ] 2.5 Port remaining host-side distro-management shell behavior from plugin/setup flows into Rust-owned logic
-- [ ] 2.6 Add targeted tests for OCI source parsing, manifest selection, metadata loading, dual-layout enumeration, and Rust-owned setup behavior
+- [x] 2.1 Refactor `install` to support OCI-backed installs while preserving Android-specific guest setup
+- [x] 2.2 Refactor `list` to enumerate both legacy installs and OCI-backed containers
+- [x] 2.3 Refactor `login`, `remove`, `reset`, `copy`, `backup`, `restore`, and `test` to branch on install source type
+- [x] 2.4 Persist and load OCI install metadata through `manifest.json`
+- [x] 2.5 Port remaining host-side distro-management shell behavior from plugin/setup flows into Rust-owned logic
+- [x] 2.6 Add targeted tests for OCI source parsing, manifest selection, metadata loading, dual-layout enumeration, and Rust-owned setup behavior
 
 ## 3. Android app migration
 
