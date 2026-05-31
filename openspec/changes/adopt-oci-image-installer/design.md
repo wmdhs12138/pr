@@ -69,6 +69,14 @@ The OCI migration will treat `libbash.so` removal as an explicit design objectiv
 - Keep shipping `libbash.so` indefinitely as a dormant compatibility binary: rejected because it preserves packaging and maintenance cost without being part of the target architecture
 - Replace Bash with another host shell while keeping shell-driven install logic: rejected because the goal is to converge on Rust-managed install logic rather than swap one host shell dependency for another
 
+### 7. Use task-scope coverage gates during migration
+
+Coverage enforcement for this change will be scoped to the modules touched by each OCI task slice, not to global repository coverage in early phases. Each implemented task must keep a minimum of 80% line coverage across its directly affected OCI-focused Rust modules.
+
+**Alternatives considered:**
+- Require global `pr-cli` coverage >= 80% immediately: rejected because migration starts with foundational slices while many unrelated modules are not in scope yet
+- Skip coverage thresholds and rely only on scenario tests: rejected because parser/resolver/extractor regressions are easier to miss without a numeric gate
+
 ## Risks / Trade-offs
 
 - **[OCI extraction complexity]** → Whiteouts, layer ordering, and tar edge cases can produce subtly broken rootfs trees. Mitigation: build the layer application code behind focused tests and start with a narrow set of supported images.
@@ -77,6 +85,7 @@ The OCI migration will treat `libbash.so` removal as an explicit design objectiv
 - **[Shell-porting scope]** → Replacing residual shell-based install logic may uncover distro-specific assumptions currently hidden in plugin hooks. Mitigation: identify the remaining hook surface early, move generic behavior into Rust first, and keep compatibility behavior explicit and testable.
 - **[UI migration confusion]** → Users may not understand why presets differ from old distro names. Mitigation: present presets with familiar distro labels and keep existing installed distros visible.
 - **[Performance/storage regression]** → OCI installs involve multiple blobs and metadata files instead of one tarball. Mitigation: use download caching and reuse existing cache lifecycle commands where possible.
+- **[False confidence from broad global coverage numbers]** → A global metric can hide weak coverage in the exact slice being changed. Mitigation: enforce >= 80% line coverage on task-scoped OCI modules and keep scenario tests for integration commands.
 
 ## Migration Plan
 

@@ -1,10 +1,10 @@
 ## 1. OCI install foundations
 
-- [ ] 1.1 Define a shared install descriptor model that can represent both legacy plugin installs and OCI-backed installs
-- [ ] 1.2 Add storage helpers for `var/lib/proot-distro/containers/<name>/rootfs` and `manifest.json`
-- [ ] 1.3 Implement source parsing for OCI image references, direct URLs, and local archives
-- [ ] 1.4 Implement manifest resolution and architecture selection for public OCI registries
-- [ ] 1.5 Implement OCI layer download, extraction, and whiteout handling into a target rootfs
+- [x] 1.1 Define a shared install descriptor model that can represent both legacy plugin installs and OCI-backed installs
+- [x] 1.2 Add storage helpers for `var/lib/proot-distro/containers/<name>/rootfs` and `manifest.json`
+- [x] 1.3 Implement source parsing for OCI image references, direct URLs, and local archives
+- [x] 1.4 Implement manifest resolution and architecture selection for public OCI registries
+- [x] 1.5 Implement OCI layer download, extraction, and whiteout handling into a target rootfs
 
 ## 2. CLI command migration
 
@@ -30,3 +30,8 @@
 - [ ] 4.3 Update user-facing docs and internal OpenSpec specs once the OCI path is implemented
 - [ ] 4.4 Remove or deprecate bundled plugin assets after OCI installs are stable
 - [ ] 4.5 Remove the remaining legacy `proot-distro.sh`/host-shell assumptions after the Rust migration is complete
+
+## 5. Coverage gates
+
+- [ ] 5.1 Enforce task-scope Rust line coverage >= 80% for each OCI migration slice before marking the task complete
+- [ ] 5.2 Document and run per-slice coverage commands alongside targeted tests for each completed task group
