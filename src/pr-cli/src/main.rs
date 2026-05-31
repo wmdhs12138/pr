@@ -339,6 +339,10 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        pr_cli::shared::global_test_env_lock()
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -441,6 +445,59 @@ mod tests {
         assert_eq!(entries[0].install_name, None);
         assert_eq!(entries[0].source, InstalledSource::Oci);
 
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn installed_source_as_str_matches_expected_labels() {
+        assert_eq!(InstalledSource::Legacy.as_str(), "legacy");
+        assert_eq!(InstalledSource::Oci.as_str(), "oci");
+    }
+
+    #[test]
+    fn list_subdirs_returns_empty_for_missing_directory() {
+        let listed = list_subdirs(Path::new("/path/that/should/not/exist-pr-cli"));
+        assert!(listed.is_empty());
+    }
+
+    #[test]
+    fn is_installed_detects_legacy_and_oci_layouts() {
+        let _guard = env_lock().lock().expect("lock env");
+        let base = unique_temp_dir("pr-cli-is-installed");
+        let prefix = base.join("usr");
+        fs::create_dir_all(prefix.join("var/lib/proot-distro/installed-rootfs/debian"))
+            .expect("create legacy rootfs");
+        fs::create_dir_all(prefix.join("var/lib/proot-distro/containers/ubuntu/rootfs"))
+            .expect("create oci rootfs");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        assert!(is_installed("debian"));
+        assert!(is_installed("ubuntu"));
+        assert!(!is_installed("fedora"));
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn collect_installed_entries_reads_default_dirs_from_prefix() {
+        let _guard = env_lock().lock().expect("lock env");
+        let base = unique_temp_dir("pr-cli-collect-installed");
+        let prefix = base.join("usr");
+        fs::create_dir_all(prefix.join("var/lib/proot-distro/installed-rootfs/debian"))
+            .expect("create legacy rootfs");
+        fs::create_dir_all(prefix.join("var/lib/proot-distro/containers/ubuntu/rootfs"))
+            .expect("create oci rootfs");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let entries = collect_installed_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].alias, "debian");
+        assert_eq!(entries[0].source, InstalledSource::Legacy);
+        assert_eq!(entries[1].alias, "ubuntu");
+        assert_eq!(entries[1].source, InstalledSource::Oci);
+
+        std::env::remove_var("APP_PREFIX");
         let _ = fs::remove_dir_all(base);
     }
 }

@@ -1463,6 +1463,10 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        crate::shared::global_test_env_lock()
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1813,4 +1817,173 @@ mod tests {
             .expect_err("must reject invalid alias");
         assert!(err.contains("--override-alias"));
     }
+
+    #[test]
+    fn derive_oci_install_name_rejects_invalid_override_alias() {
+        let resolved = ResolvedOciReference {
+            registry_base: "https://ghcr.io".to_string(),
+            repository: "example/app".to_string(),
+            reference: "latest".to_string(),
+            digest_reference: false,
+        };
+        let err = derive_oci_install_name(&resolved, Some("../bad"))
+            .expect_err("invalid override alias must fail");
+        assert!(err.contains("--override-alias"));
+    }
+
+    #[test]
+    fn normalized_oci_reference_trims_registry_trailing_slash() {
+        let resolved = ResolvedOciReference {
+            registry_base: "https://ghcr.io/".to_string(),
+            repository: "example/app".to_string(),
+            reference: "latest".to_string(),
+            digest_reference: false,
+        };
+        assert_eq!(
+            normalized_oci_reference(&resolved),
+            "ghcr.io/example/app:latest"
+        );
+    }
+
+    #[test]
+    fn detect_device_arch_prefers_distro_arch_env_override() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("DISTRO_ARCH", "armv7");
+        assert_eq!(detect_device_arch(), "armv7");
+        std::env::remove_var("DISTRO_ARCH");
+    }
+
+    #[test]
+    fn run_cmd_reports_missing_binary_error() {
+        let err = run_cmd("/path/that/does/not/exist-pr-cli", &[])
+            .expect_err("must report missing binary");
+        assert!(err.contains("failed to execute"));
+    }
+
+    #[test]
+    fn run_cmd_reports_stderr_for_nonzero_exit() {
+        let err = run_cmd("/bin/sh", &["-c", "echo fail-msg 1>&2; exit 7"])
+            .expect_err("must return stderr");
+        assert_eq!(err, "fail-msg");
+    }
+
+    #[test]
+    fn run_busybox_cmd_reports_missing_binary_error() {
+        let err = run_busybox_cmd("echo", &["hello"]).expect_err("busybox should be missing");
+        assert!(err.contains("failed to execute busybox"));
+    }
+
+    #[test]
+    fn registry_host_helpers_cover_common_cases() {
+        assert!(looks_like_registry_host("ghcr.io"));
+        assert!(looks_like_registry_host("localhost:5000"));
+        assert!(!looks_like_registry_host("library"));
+
+        assert_eq!(normalize_registry_host("DOCKER.IO"), "registry-1.docker.io");
+        assert_eq!(normalize_registry_host("ghcr.io"), "ghcr.io");
+
+        assert!(is_docker_hub_host("registry-1.docker.io"));
+        assert!(!is_docker_hub_host("ghcr.io"));
+    }
+
+    #[test]
+    fn map_descriptor_preserves_digest_size_and_platform() {
+        let descriptor = RegistryDescriptor {
+            media_type: Some("application/vnd.oci.image.manifest.v1+json".to_string()),
+            digest: "sha256:abc123".to_string(),
+            size: Some(42),
+            urls: vec!["https://example.invalid/blob".to_string()],
+            annotations: std::collections::BTreeMap::from([(
+                "org.opencontainers.image.ref.name".to_string(),
+                "latest".to_string(),
+            )]),
+            platform: Some(RegistryPlatform {
+                os: "linux".to_string(),
+                architecture: "arm64".to_string(),
+                variant: Some("v8".to_string()),
+                os_version: Some("1".to_string()),
+                os_features: vec!["feat".to_string()],
+            }),
+        };
+
+        let mapped = map_descriptor(descriptor);
+        assert_eq!(
+            mapped.media_type,
+            Some("application/vnd.oci.image.manifest.v1+json".to_string())
+        );
+        assert_eq!(mapped.digest, "sha256:abc123");
+        assert_eq!(mapped.size, Some(42));
+        assert_eq!(mapped.urls.len(), 1);
+        assert_eq!(mapped.annotations.len(), 1);
+        let platform = mapped.platform.expect("platform");
+        assert_eq!(platform.os, "linux");
+        assert_eq!(platform.architecture, "arm64");
+        assert_eq!(platform.variant.as_deref(), Some("v8"));
+    }
+
+    #[test]
+    fn parse_bearer_challenge_requires_realm() {
+        assert!(parse_bearer_challenge(r#"Bearer service="registry.example""#).is_none());
+    }
+
+    #[test]
+    fn map_descriptor_handles_missing_platform() {
+        let descriptor = RegistryDescriptor {
+            media_type: None,
+            digest: "sha256:def456".to_string(),
+            size: None,
+            urls: Vec::new(),
+            annotations: std::collections::BTreeMap::new(),
+            platform: None,
+        };
+        let mapped = map_descriptor(descriptor);
+        assert_eq!(mapped.digest, "sha256:def456");
+        assert!(mapped.platform.is_none());
+        assert!(mapped.media_type.is_none());
+    }
+
+    #[test]
+    fn append_line_if_missing_creates_new_file() {
+        let tmp_dir = unique_temp_dir("pr-cli-append-line-new-file");
+        fs::create_dir_all(&tmp_dir).expect("create temp dir");
+        let file_path = tmp_dir.join("new.conf");
+
+        append_line_if_missing(&file_path, "line=value").expect("append line");
+        let content = fs::read_to_string(&file_path).expect("read file");
+        assert_eq!(content, "line=value\n");
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn uncomment_en_us_locale_returns_error_when_file_missing() {
+        let tmp_dir = unique_temp_dir("pr-cli-locale-missing");
+        fs::create_dir_all(&tmp_dir).expect("create temp dir");
+        let err = uncomment_en_us_locale(tmp_dir.to_str().expect("tmp path"))
+            .expect_err("must fail when locale.gen is missing");
+        assert!(err.contains("locale.gen"));
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn write_config_files_with_non_rust_owned_distro_skips_profile_setup() {
+        let tmp_dir = unique_temp_dir("pr-cli-write-config-alpine");
+        let rootfs = tmp_dir.join("rootfs");
+        fs::create_dir_all(rootfs.join("etc")).expect("create etc");
+        fs::write(rootfs.join("etc/environment"), "").expect("seed environment");
+        fs::write(rootfs.join("etc/hosts"), "").expect("seed hosts");
+        fs::write(rootfs.join("etc/passwd"), "").expect("seed passwd");
+        fs::write(rootfs.join("etc/shadow"), "").expect("seed shadow");
+        fs::write(rootfs.join("etc/group"), "").expect("seed group");
+        fs::write(rootfs.join("etc/gshadow"), "").expect("seed gshadow");
+
+        write_config_files(rootfs.to_str().expect("path"), Some("alpine"))
+            .expect("write config files");
+        assert!(rootfs.join("etc/resolv.conf").is_file());
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
 }

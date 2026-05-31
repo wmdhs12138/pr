@@ -1,5 +1,4 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -391,4 +390,194 @@ pub fn command_test(distro: &str, suite: Option<&str>, verbose: bool) -> Result<
 
     println!();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        crate::shared::global_test_env_lock()
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
+
+    #[test]
+    fn parse_tap_counts_pass_fail_and_skip() {
+        let tap = "ok 1 distro basics\nok 2 rust compile # SKIP missing rustc\nnot ok 3 git clone\n";
+        let result = parse_tap(tap);
+        assert_eq!(result.passed, 1);
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.skipped, 1);
+        assert_eq!(result.failures, vec!["git clone".to_string()]);
+    }
+
+    #[test]
+    fn parse_tap_ignores_non_tap_lines_and_empty_input() {
+        let tap = "\nTAP version 13\n1..2\n# comment\n";
+        let result = parse_tap(tap);
+        assert_eq!(result.passed, 0);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.skipped, 0);
+        assert!(result.failures.is_empty());
+    }
+
+    #[test]
+    fn detect_package_manager_finds_apk_then_apt() {
+        let tmp_dir = unique_temp_dir("pr-cli-cmd-test-pkg");
+        let rootfs = tmp_dir.join("rootfs");
+        fs::create_dir_all(rootfs.join("usr/bin")).expect("create rootfs dirs");
+
+        fs::write(rootfs.join("usr/bin/apk"), b"").expect("write apk");
+        assert_eq!(
+            detect_package_manager(rootfs.to_str().expect("rootfs path")).expect("find apk"),
+            "apk"
+        );
+
+        fs::remove_file(rootfs.join("usr/bin/apk")).expect("remove apk");
+        fs::write(rootfs.join("usr/bin/apt-get"), b"").expect("write apt-get");
+        assert_eq!(
+            detect_package_manager(rootfs.to_str().expect("rootfs path")).expect("find apt"),
+            "apt"
+        );
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn detect_package_manager_returns_helpful_error_when_missing() {
+        let tmp_dir = unique_temp_dir("pr-cli-cmd-test-pkg-missing");
+        let rootfs = tmp_dir.join("rootfs");
+        fs::create_dir_all(&rootfs).expect("create rootfs");
+
+        let err = detect_package_manager(rootfs.to_str().expect("rootfs path"))
+            .expect_err("must fail without apk/apt");
+        assert!(err.contains("no supported package manager found"));
+        assert!(err.contains("checked="));
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn deploy_binary_writes_executable_file() {
+        let tmp_dir = unique_temp_dir("pr-cli-cmd-test-deploy");
+        fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+
+        deploy_binary(tmp_dir.to_str().expect("tmp path")).expect("deploy test binary");
+        let deployed = tmp_dir.join("pit");
+        assert!(deployed.exists());
+        let mode = fs::metadata(&deployed)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_ne!(mode & 0o111, 0);
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_test_rejects_unknown_suite_early() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-cmd-test-unknown-suite");
+        let prefix = tmp_dir.join("usr");
+        let legacy_rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        fs::create_dir_all(&legacy_rootfs).expect("create installed rootfs");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_test("debian", Some("unknown-suite"), false)
+            .expect_err("must reject unknown suite");
+        assert!(err.contains("unknown suite"));
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn parse_tap_handles_entries_without_test_name() {
+        let tap = "ok 1\nnot ok 2\n";
+        let result = parse_tap(tap);
+        assert_eq!(result.passed, 1);
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.failures, vec!["".to_string()]);
+    }
+
+    #[test]
+    fn detect_package_manager_prefers_sbin_locations_for_apk() {
+        let tmp_dir = unique_temp_dir("pr-cli-cmd-test-apk-sbin");
+        let rootfs = tmp_dir.join("rootfs");
+        fs::create_dir_all(rootfs.join("usr/sbin")).expect("create usr/sbin");
+
+        fs::write(rootfs.join("usr/sbin/apk"), b"").expect("write usr/sbin/apk");
+        assert_eq!(
+            detect_package_manager(rootfs.to_str().expect("rootfs path")).expect("find apk"),
+            "apk"
+        );
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn deploy_binary_fails_when_cache_dir_is_missing() {
+        let tmp_dir = unique_temp_dir("pr-cli-cmd-test-deploy-missing");
+        let missing_dir = tmp_dir.join("no-such-dir");
+        let err = deploy_binary(missing_dir.to_str().expect("missing path"))
+            .expect_err("deploy should fail for missing parent dir");
+        assert!(err.contains("create"));
+    }
+
+    #[test]
+    fn install_tools_rejects_unknown_package_manager() {
+        let err = install_tools("/tmp/irrelevant", "unknown").expect_err("must fail");
+        assert!(err.contains("unknown package manager"));
+    }
+
+    #[test]
+    fn run_proot_command_and_streaming_report_spawn_failures() {
+        let err = run_proot_command("/", "echo hi").expect_err("spawn should fail");
+        assert!(err.contains("proot exec"));
+
+        let err = run_proot_streaming("/", "echo hi").expect_err("spawn should fail");
+        assert!(err.contains("proot spawn"));
+    }
+
+    #[test]
+    fn command_test_returns_not_installed_when_rootfs_missing() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-cmd-test-not-installed");
+        let prefix = tmp_dir.join("usr");
+        fs::create_dir_all(&prefix).expect("create prefix");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_test("debian", None, false).expect_err("must fail");
+        assert_eq!(err, "not installed");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_test_returns_not_installed_when_rootfs_path_is_file() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-cmd-test-rootfs-file");
+        let prefix = tmp_dir.join("usr");
+        let rootfs_file = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        fs::create_dir_all(rootfs_file.parent().expect("parent")).expect("create parent");
+        fs::write(&rootfs_file, b"not a directory").expect("write file");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_test("debian", None, false).expect_err("must fail");
+        assert_eq!(err, "not installed");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
 }

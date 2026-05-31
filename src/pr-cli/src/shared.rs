@@ -8,6 +8,12 @@ pub const DEFAULT_SECONDARY_NAMESERVER: &str = "8.8.4.4";
 pub const DEFAULT_PATH_ENV_SUFFIX: &str =
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games";
 
+pub fn global_test_env_lock() -> &'static std::sync::Mutex<()> {
+    use std::sync::{Mutex, OnceLock};
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstalledSourceType {
     Legacy,
@@ -342,12 +348,10 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        super::global_test_env_lock()
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

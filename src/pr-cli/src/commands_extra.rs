@@ -647,3 +647,387 @@ fn resolve_path(dist: Option<&str>, path: &str) -> Result<String, String> {
         Ok(canonical.to_string_lossy().to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        crate::shared::global_test_env_lock()
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
+
+    #[test]
+    fn parse_dist_path_splits_only_valid_dist_prefix() {
+        assert_eq!(
+            parse_dist_path("debian:/etc/os-release"),
+            (Some("debian".to_string()), "/etc/os-release".to_string())
+        );
+        assert_eq!(
+            parse_dist_path("/tmp/file.txt"),
+            (None, "/tmp/file.txt".to_string())
+        );
+        assert_eq!(parse_dist_path("debian:"), (None, "debian:".to_string()));
+    }
+
+    #[test]
+    fn resolve_path_without_dist_keeps_missing_path_string() {
+        let path = "/this/path/should/not/exist-for-pr-cli";
+        let resolved = resolve_path(None, path).expect("resolve path");
+        assert_eq!(resolved, path);
+    }
+
+    #[test]
+    fn resolve_path_with_missing_dist_returns_error() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-resolve");
+        let prefix = tmp_dir.join("usr");
+        fs::create_dir_all(&prefix).expect("create prefix");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = resolve_path(Some("debian"), "/etc/os-release")
+            .expect_err("must fail when distro is not installed");
+        assert_eq!(err, "distro not installed");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_clear_cache_ok_when_cache_dir_missing() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-clear-missing");
+        let prefix = tmp_dir.join("usr");
+        fs::create_dir_all(&prefix).expect("create prefix");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let result = command_clear_cache();
+        assert!(result.is_ok());
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_clear_cache_deletes_cached_files() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-clear-files");
+        let prefix = tmp_dir.join("usr");
+        let cache_dir = prefix.join("var/lib/proot-distro/dlcache");
+        fs::create_dir_all(&cache_dir).expect("create cache dir");
+        fs::write(cache_dir.join("one.tar.xz"), b"a").expect("write cache file");
+        fs::write(cache_dir.join("two.tar.xz"), b"bb").expect("write cache file");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        command_clear_cache().expect("clear cache");
+
+        let remaining = fs::read_dir(&cache_dir)
+            .expect("read cache dir")
+            .filter_map(|e| e.ok())
+            .count();
+        assert_eq!(remaining, 0);
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_backup_requires_output_path_for_installed_distro() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-backup-no-output");
+        let prefix = tmp_dir.join("usr");
+        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        fs::create_dir_all(&rootfs).expect("create installed rootfs");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_backup("debian", None).expect_err("must require output path");
+        assert_eq!(err, "no output path");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_backup_rejects_output_directory() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-backup-output-dir");
+        let prefix = tmp_dir.join("usr");
+        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let out_dir = tmp_dir.join("output-dir");
+        fs::create_dir_all(&rootfs).expect("create installed rootfs");
+        fs::create_dir_all(&out_dir).expect("create output dir");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_backup("debian", Some(out_dir.to_str().expect("output dir path")))
+            .expect_err("must reject output directory");
+        assert_eq!(err, "output is directory");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_restore_rejects_missing_tarball() {
+        let err = command_restore("/path/that/does/not/exist.tar.xz")
+            .expect_err("must reject missing tarball");
+        assert_eq!(err, "file not found");
+    }
+
+    #[test]
+    fn command_restore_rejects_directory_path() {
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-restore-dir");
+        fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+
+        let err = command_restore(tmp_dir.to_str().expect("tmp dir path"))
+            .expect_err("must reject directory path");
+        assert_eq!(err, "path is directory");
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_rename_rejects_same_alias() {
+        let err = command_rename("debian", "debian").expect_err("must reject same alias");
+        assert_eq!(err, "same alias");
+    }
+
+    #[test]
+    fn command_copy_rejects_missing_source() {
+        let err = command_copy("/tmp/does-not-exist", "/tmp/destination-file")
+            .expect_err("must reject missing source path");
+        assert_eq!(err, "source not found");
+    }
+
+    #[test]
+    fn chmod_recursive_sets_directory_and_file_modes() {
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-chmod-recursive");
+        let nested = tmp_dir.join("nested");
+        let file = nested.join("note.txt");
+        fs::create_dir_all(&nested).expect("create nested dir");
+        fs::write(&file, b"hello").expect("write file");
+        fs::set_permissions(&tmp_dir, fs::Permissions::from_mode(0o700)).expect("chmod root");
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).expect("chmod nested");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("chmod file");
+
+        chmod_recursive(&tmp_dir);
+
+        let root_mode = fs::metadata(&tmp_dir).expect("root meta").permissions().mode() & 0o777;
+        let nested_mode = fs::metadata(&nested).expect("nested meta").permissions().mode() & 0o777;
+        let file_mode = fs::metadata(&file).expect("file meta").permissions().mode() & 0o777;
+        assert_eq!(root_mode, 0o755);
+        assert_eq!(nested_mode, 0o755);
+        assert_eq!(file_mode, 0o644);
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn chmod_readable_recursive_sets_readable_permissions() {
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-chmod-readable");
+        let nested = tmp_dir.join("nested");
+        let file = nested.join("note.txt");
+        fs::create_dir_all(&nested).expect("create nested dir");
+        fs::write(&file, b"hello").expect("write file");
+        fs::set_permissions(&tmp_dir, fs::Permissions::from_mode(0o700)).expect("chmod root");
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).expect("chmod nested");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("chmod file");
+
+        chmod_readable_recursive(&tmp_dir);
+
+        let root_mode = fs::metadata(&tmp_dir).expect("root meta").permissions().mode() & 0o777;
+        let nested_mode = fs::metadata(&nested).expect("nested meta").permissions().mode() & 0o777;
+        let file_mode = fs::metadata(&file).expect("file meta").permissions().mode() & 0o777;
+        assert_eq!(root_mode, 0o755);
+        assert_eq!(nested_mode, 0o755);
+        assert_eq!(file_mode, 0o644);
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn force_remove_dir_all_removes_non_empty_tree() {
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-force-remove");
+        let tree = tmp_dir.join("tree/sub");
+        fs::create_dir_all(&tree).expect("create tree");
+        fs::write(tree.join("payload.txt"), b"payload").expect("write file");
+
+        force_remove_dir_all(&tmp_dir.join("tree"));
+        assert!(!tmp_dir.join("tree").exists());
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_remove_and_reset_report_not_installed() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-not-installed");
+        let prefix = tmp_dir.join("usr");
+        fs::create_dir_all(&prefix).expect("create prefix");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let remove_err = command_remove("debian", false).expect_err("remove should fail");
+        assert_eq!(remove_err, "not installed");
+
+        let reset_err = command_reset("debian").expect_err("reset should fail");
+        assert_eq!(reset_err, "not installed");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_rename_rejects_empty_or_invalid_new_alias() {
+        assert_eq!(
+            command_rename("debian", "").expect_err("empty alias must fail"),
+            "empty alias"
+        );
+        assert_eq!(
+            command_rename("debian", ".hidden").expect_err("invalid alias must fail"),
+            "invalid alias"
+        );
+        assert_eq!(
+            command_rename("debian", "name.sh").expect_err("suffix .sh must fail"),
+            "alias ends with .sh"
+        );
+    }
+
+    #[test]
+    fn command_backup_rejects_existing_output_file() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-backup-existing-file");
+        let prefix = tmp_dir.join("usr");
+        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let output = tmp_dir.join("backup.tar.xz");
+        fs::create_dir_all(&rootfs).expect("create installed rootfs");
+        fs::write(&output, b"exists").expect("create output file");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_backup("debian", Some(output.to_str().expect("output path")))
+            .expect_err("must reject existing output file");
+        assert_eq!(err, "output exists");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn parse_dist_path_treats_empty_prefix_as_local_path() {
+        assert_eq!(
+            parse_dist_path(":/etc/os-release"),
+            (None, ":/etc/os-release".to_string())
+        );
+    }
+
+    #[test]
+    fn command_backup_reports_not_installed_when_rootfs_missing() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-backup-not-installed");
+        let prefix = tmp_dir.join("usr");
+        fs::create_dir_all(&prefix).expect("create prefix");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_backup("debian", Some("/tmp/out.tar.xz"))
+            .expect_err("backup should fail without installed rootfs");
+        assert_eq!(err, "not installed");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_rename_reports_unknown_distribution_when_plugin_missing() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-rename-unknown");
+        let prefix = tmp_dir.join("usr");
+        fs::create_dir_all(prefix.join("etc/proot-distro")).expect("create plugins dir");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_rename("debian", "debian-new")
+            .expect_err("rename should fail for unknown distro");
+        assert_eq!(err, "unknown distribution");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_rename_reports_not_installed_when_rootfs_missing() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-rename-not-installed");
+        let prefix = tmp_dir.join("usr");
+        let plugins_dir = prefix.join("etc/proot-distro");
+        fs::create_dir_all(&plugins_dir).expect("create plugins dir");
+        fs::write(
+            plugins_dir.join("debian.sh"),
+            "DISTRO_NAME=\"Debian\"\nTARBALL_URL_aarch64=\"https://example.invalid/debian.tar.xz\"\nTARBALL_SHA256_aarch64=\"abc\"\n",
+        )
+        .expect("write plugin");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_rename("debian", "debian-new")
+            .expect_err("rename should fail without installed rootfs");
+        assert_eq!(err, "not installed");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_copy_with_distro_prefix_reports_missing_distro() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-copy-missing-distro");
+        let prefix = tmp_dir.join("usr");
+        fs::create_dir_all(&prefix).expect("create prefix");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_copy("debian:/etc/passwd", "/tmp/out")
+            .expect_err("copy should fail for missing distro");
+        assert_eq!(err, "distro not installed");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_restore_reports_uninspectable_tarball_without_busybox() {
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-restore-uninspectable");
+        fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+        let tarball = tmp_dir.join("backup.tar.xz");
+        fs::write(&tarball, b"not-a-real-tarball").expect("write file");
+
+        let err = command_restore(tarball.to_str().expect("tarball path"))
+            .expect_err("restore should fail to inspect tarball");
+        assert!(err.contains("list tarball"));
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn resolve_path_with_installed_distro_prefixes_rootfs_path() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-commands-extra-resolve-installed");
+        let prefix = tmp_dir.join("usr");
+        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        fs::create_dir_all(rootfs.join("etc")).expect("create rootfs etc");
+        fs::write(rootfs.join("etc/os-release"), "NAME=Debian\n").expect("write os-release");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let resolved =
+            resolve_path(Some("debian"), "etc/os-release").expect("resolve installed path");
+        assert!(resolved.ends_with("/etc/os-release"));
+        assert!(resolved.contains("/installed-rootfs/debian/"));
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+}

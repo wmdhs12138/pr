@@ -173,6 +173,17 @@ Format: `<task-id>: <description>`
 Examples: `T5.3: fix fake root and kernel-release for Debian — 37/37 ALL PASS`
 Task IDs reference `openspec/changes/initial-implementation/tasks.md`.
 
+Commit message policy:
+- Do not add `Co-authored-by` trailers.
+- Keep subject/body informative, with wrapped body lines (target <= 72 cols).
+- Avoid migration-marketing phrasing; describe technical changes directly.
+
+### Coverage gate policy
+
+- Preserve or improve test coverage on touched code.
+- Do not close a task unless coverage is at least 80%.
+- Prefer targeted tests first, then broader coverage runs when needed.
+
 ### Code style
 
 - No comments unless explicitly requested

@@ -215,3 +215,152 @@ pub fn command_login(
 
     Err(format!("exec proot failed: {}", err))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        crate::shared::global_test_env_lock()
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
+
+    #[test]
+    fn parse_passwd_entry_accepts_valid_line() {
+        let line = "alice:x:1000:1000:Alice:/home/alice:/bin/sh";
+        let entry = parse_passwd_entry(line).expect("parse passwd line");
+        assert_eq!(entry.uid, 1000);
+        assert_eq!(entry.gid, 1000);
+        assert_eq!(entry.home, "/home/alice");
+        assert_eq!(entry.shell, "/bin/sh");
+    }
+
+    #[test]
+    fn parse_passwd_entry_rejects_invalid_line() {
+        assert!(parse_passwd_entry("alice:x:baduid:1000:Alice:/home/alice:/bin/sh").is_none());
+        assert!(parse_passwd_entry("too:few:fields").is_none());
+    }
+
+    #[test]
+    fn find_user_in_passwd_finds_expected_user() {
+        let tmp_dir = unique_temp_dir("pr-cli-login-passwd");
+        fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+        let passwd = tmp_dir.join("passwd");
+        fs::write(
+            &passwd,
+            "root:x:0:0:root:/root:/bin/sh\nalice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
+        )
+        .expect("write passwd");
+
+        let entry = find_user_in_passwd(passwd.to_str().expect("passwd path"), "alice")
+            .expect("find alice entry");
+        assert_eq!(entry.home, "/home/alice");
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn find_user_in_passwd_returns_error_when_missing() {
+        let tmp_dir = unique_temp_dir("pr-cli-login-passwd-missing");
+        fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+        let passwd = tmp_dir.join("passwd");
+        fs::write(&passwd, "root:x:0:0:root:/root:/bin/sh\n").expect("write passwd");
+
+        let err = match find_user_in_passwd(passwd.to_str().expect("passwd path"), "alice") {
+            Ok(_) => panic!("must fail for missing user"),
+            Err(err) => err,
+        };
+        assert!(err.contains("no user 'alice' defined in /etc/passwd"));
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn update_etc_environment_filters_and_appends_android_vars() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-login-env");
+        let rootfs = tmp_dir.join("rootfs");
+        let etc = rootfs.join("etc");
+        fs::create_dir_all(&etc).expect("create etc");
+        fs::write(
+            etc.join("environment"),
+            "KEEP_ME=1\nANDROID_ROOT=old\nBOOTCLASSPATH=old\n",
+        )
+        .expect("seed environment");
+        std::env::set_var("ANDROID_ROOT", "/system");
+        std::env::set_var("BOOTCLASSPATH", "/apex/jars");
+
+        update_etc_environment(rootfs.to_str().expect("rootfs path"));
+        let content = fs::read_to_string(etc.join("environment")).expect("read environment");
+        assert!(content.contains("KEEP_ME=1"));
+        assert!(content.contains("ANDROID_ROOT=/system"));
+        assert!(content.contains("BOOTCLASSPATH=/apex/jars"));
+        assert!(!content.contains("ANDROID_ROOT=old"));
+        assert!(!content.contains("BOOTCLASSPATH=old"));
+
+        std::env::remove_var("ANDROID_ROOT");
+        std::env::remove_var("BOOTCLASSPATH");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_login_returns_not_installed_when_rootfs_missing() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-login-not-installed");
+        let prefix = tmp_dir.join("usr");
+        fs::create_dir_all(&prefix).expect("create prefix");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_login("debian", "root", false, false, &[], &[])
+            .expect_err("must fail when distro not installed");
+        assert_eq!(err, "not installed");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_login_requires_passwd_file() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-login-no-passwd");
+        let prefix = tmp_dir.join("usr");
+        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        fs::create_dir_all(&rootfs).expect("create rootfs");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_login("debian", "root", false, false, &[], &[])
+            .expect_err("must fail when /etc/passwd is missing");
+        assert_eq!(err, "no /etc/passwd");
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn command_login_returns_user_lookup_error_before_exec() {
+        let _guard = env_lock().lock().expect("lock env");
+        let tmp_dir = unique_temp_dir("pr-cli-login-missing-user");
+        let prefix = tmp_dir.join("usr");
+        let rootfs = prefix.join("var/lib/proot-distro/installed-rootfs/debian");
+        let etc = rootfs.join("etc");
+        fs::create_dir_all(&etc).expect("create etc");
+        fs::write(etc.join("passwd"), "root:x:0:0:root:/root:/bin/sh\n").expect("write passwd");
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+
+        let err = command_login("debian", "alice", false, false, &[], &[])
+            .expect_err("must fail when user does not exist");
+        assert!(err.contains("no user 'alice' defined in /etc/passwd"));
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+}
