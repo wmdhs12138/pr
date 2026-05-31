@@ -24,6 +24,38 @@ pub fn get_installed_rootfs_dir() -> String {
     format!("{}/var/lib/proot-distro/installed-rootfs", get_prefix())
 }
 
+fn get_oci_containers_dir_for_prefix(prefix: &str) -> String {
+    format!("{}/var/lib/proot-distro/containers", prefix)
+}
+
+fn get_oci_container_dir_for_prefix(prefix: &str, name: &str) -> String {
+    format!("{}/{}", get_oci_containers_dir_for_prefix(prefix), name)
+}
+
+fn get_oci_container_rootfs_dir_for_prefix(prefix: &str, name: &str) -> String {
+    format!("{}/rootfs", get_oci_container_dir_for_prefix(prefix, name))
+}
+
+fn get_oci_container_manifest_path_for_prefix(prefix: &str, name: &str) -> String {
+    format!("{}/manifest.json", get_oci_container_dir_for_prefix(prefix, name))
+}
+
+pub fn get_oci_containers_dir() -> String {
+    get_oci_containers_dir_for_prefix(&get_prefix())
+}
+
+pub fn get_oci_container_dir(name: &str) -> String {
+    get_oci_container_dir_for_prefix(&get_prefix(), name)
+}
+
+pub fn get_oci_container_rootfs_dir(name: &str) -> String {
+    get_oci_container_rootfs_dir_for_prefix(&get_prefix(), name)
+}
+
+pub fn get_oci_container_manifest_path(name: &str) -> String {
+    get_oci_container_manifest_path_for_prefix(&get_prefix(), name)
+}
+
 pub fn get_download_cache_dir() -> String {
     format!("{}/var/lib/proot-distro/dlcache", get_prefix())
 }
@@ -287,4 +319,32 @@ pub fn build_proot_child_env() -> Vec<(String, String)> {
     }
 
     env
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oci_container_paths_follow_expected_layout() {
+        let prefix = "/data/data/id.or.oo.pr/files/usr";
+        let name = "debian";
+
+        assert_eq!(
+            get_oci_containers_dir_for_prefix(prefix),
+            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers"
+        );
+        assert_eq!(
+            get_oci_container_dir_for_prefix(prefix, name),
+            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian"
+        );
+        assert_eq!(
+            get_oci_container_rootfs_dir_for_prefix(prefix, name),
+            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian/rootfs"
+        );
+        assert_eq!(
+            get_oci_container_manifest_path_for_prefix(prefix, name),
+            "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian/manifest.json"
+        );
+    }
 }
