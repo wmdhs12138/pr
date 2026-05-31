@@ -7,14 +7,24 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::color::*;
+use crate::install_model::{write_oci_install_metadata, OciInstallMetadata};
+use crate::oci::{
+    apply_layer_blob, blob_path, blob_url, download_blob_with_bearer, select_manifest_descriptor, OciDescriptor,
+    OciManifest, OciPlatform, OCI_IMAGE_INDEX_MEDIA_TYPE, OCI_IMAGE_MANIFEST_MEDIA_TYPE,
+    DOCKER_MANIFEST_LIST_MEDIA_TYPE, DOCKER_MANIFEST_MEDIA_TYPE,
+};
 use crate::plugin::load_plugins;
+use crate::source_parse::{InstallSourceInput, InstallSourceInputKind};
 use crate::shared::{
     get_download_cache_dir, get_installed_rootfs_dir,
-    get_native_busybox, get_native_proot, get_native_bash, get_native_loader,
-    get_plugins_dir, get_prefix, msg_error, msg_status, DEFAULT_FAKE_KERNEL_RELEASE,
+    get_native_busybox, get_native_proot, get_native_loader,
+    get_oci_container_dir, get_oci_container_manifest_path, get_oci_container_rootfs_dir,
+    get_oci_containers_dir, get_plugins_dir, get_prefix, msg_error, msg_status,
+    resolve_installed_rootfs, DEFAULT_FAKE_KERNEL_RELEASE,
     DEFAULT_FAKE_KERNEL_VERSION, DEFAULT_PRIMARY_NAMESERVER, DEFAULT_SECONDARY_NAMESERVER,
 };
 
@@ -91,6 +101,561 @@ fn run_busybox_cmd(applet: &str, args: &[&str]) -> Result<String, String> {
             stderr
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedOciReference {
+    registry_base: String,
+    repository: String,
+    reference: String,
+    digest_reference: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegistryManifestResponse {
+    #[serde(default, rename = "schemaVersion")]
+    schema_version: u32,
+    #[serde(default, rename = "mediaType")]
+    media_type: Option<String>,
+    #[serde(default)]
+    manifests: Vec<RegistryDescriptor>,
+    #[serde(default)]
+    config: Option<RegistryDescriptor>,
+    #[serde(default)]
+    layers: Vec<RegistryDescriptor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegistryDescriptor {
+    #[serde(default, rename = "mediaType")]
+    media_type: Option<String>,
+    digest: String,
+    #[serde(default)]
+    size: Option<u64>,
+    #[serde(default)]
+    urls: Vec<String>,
+    #[serde(default)]
+    annotations: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    platform: Option<RegistryPlatform>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegistryPlatform {
+    #[serde(default)]
+    os: String,
+    #[serde(default)]
+    architecture: String,
+    #[serde(default)]
+    variant: Option<String>,
+    #[serde(default, rename = "os.version")]
+    os_version: Option<String>,
+    #[serde(default, rename = "os.features")]
+    os_features: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BearerTokenResponse {
+    token: Option<String>,
+    access_token: Option<String>,
+}
+
+#[derive(Debug)]
+struct BearerChallenge {
+    realm: String,
+    service: Option<String>,
+    scope: Option<String>,
+}
+
+#[derive(Debug)]
+struct ResolvedOciManifest {
+    manifest: OciManifest,
+    bearer_token: Option<String>,
+}
+
+fn resolve_oci_reference(input: &str) -> Result<ResolvedOciReference, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("empty OCI reference".to_string());
+    }
+
+    let (name_part, reference, is_digest) = if let Some((name, digest)) = input.rsplit_once('@') {
+        if name.is_empty() || digest.is_empty() {
+            return Err(format!("invalid OCI reference '{}'", input));
+        }
+        (name, digest.to_string(), true)
+    } else {
+        let last_slash = input.rfind('/');
+        let last_colon = input.rfind(':');
+        let (name, tag) = match (last_slash, last_colon) {
+            (_, None) => (input, "latest".to_string()),
+            (Some(slash), Some(colon)) if colon > slash => (&input[..colon], input[colon + 1..].to_string()),
+            (None, Some(colon)) => (&input[..colon], input[colon + 1..].to_string()),
+            _ => (input, "latest".to_string()),
+        };
+        if name.is_empty() || tag.is_empty() {
+            return Err(format!("invalid OCI reference '{}'", input));
+        }
+        (name, tag, false)
+    };
+
+    let segments: Vec<&str> = name_part.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() {
+        return Err(format!("invalid OCI reference '{}'", input));
+    }
+
+    let (registry_host, repository) = if segments.len() == 1 {
+        (
+            "registry-1.docker.io".to_string(),
+            format!("library/{}", segments[0]),
+        )
+    } else if looks_like_registry_host(segments[0]) {
+        let registry_host = normalize_registry_host(segments[0]);
+        let mut repository = segments[1..].join("/");
+        if is_docker_hub_host(&registry_host) && !repository.contains('/') {
+            repository = format!("library/{}", repository);
+        }
+        (registry_host, repository)
+    } else {
+        ("registry-1.docker.io".to_string(), segments.join("/"))
+    };
+
+    if repository.is_empty() {
+        return Err(format!("invalid OCI repository '{}'", input));
+    }
+
+    let reference = if is_digest {
+        if !reference.contains(':') {
+            return Err(format!("invalid OCI digest reference '{}'", input));
+        }
+        reference
+    } else {
+        reference
+    };
+
+    Ok(ResolvedOciReference {
+        registry_base: format!("https://{}", registry_host),
+        repository,
+        reference,
+        digest_reference: is_digest,
+    })
+}
+
+fn looks_like_registry_host(segment: &str) -> bool {
+    segment == "localhost" || segment.contains('.') || segment.contains(':')
+}
+
+fn normalize_registry_host(host: &str) -> String {
+    let normalized = host.to_ascii_lowercase();
+    if normalized == "docker.io" || normalized == "index.docker.io" {
+        "registry-1.docker.io".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn is_docker_hub_host(host: &str) -> bool {
+    matches!(host, "docker.io" | "index.docker.io" | "registry-1.docker.io")
+}
+
+fn default_install_name_for_oci(reference: &ResolvedOciReference) -> String {
+    reference
+        .repository
+        .rsplit('/')
+        .next()
+        .map(sanitize_install_name)
+        .unwrap_or_else(|| "container".to_string())
+}
+
+fn derive_oci_install_name(
+    resolved: &ResolvedOciReference,
+    override_alias: Option<&str>,
+) -> Result<String, String> {
+    if let Some(alias) = override_alias {
+        validate_alias_format(alias)?;
+        return Ok(alias.to_string());
+    }
+
+    let default_name = default_install_name_for_oci(resolved);
+    if validate_alias_format(&default_name).is_ok() {
+        return Ok(default_name);
+    }
+
+    Ok("container".to_string())
+}
+
+fn normalized_oci_reference(reference: &ResolvedOciReference) -> String {
+    let registry_host = reference
+        .registry_base
+        .strip_prefix("https://")
+        .unwrap_or(reference.registry_base.as_str())
+        .trim_end_matches('/');
+    if reference.digest_reference {
+        format!("{}/{}@{}", registry_host, reference.repository, reference.reference)
+    } else {
+        format!("{}/{}:{}", registry_host, reference.repository, reference.reference)
+    }
+}
+
+fn sanitize_install_name(raw: &str) -> String {
+    let mut output = String::new();
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '+' | '-') {
+            output.push(c.to_ascii_lowercase());
+        }
+    }
+    if output.is_empty() {
+        "container".to_string()
+    } else {
+        output
+    }
+}
+
+fn validate_alias_format(alias: &str) -> Result<(), String> {
+    if alias.is_empty() {
+        return Err("argument to --override-alias should not be empty".to_string());
+    }
+    if alias.ends_with(".sh") {
+        return Err("argument to --override-alias should not end with '.sh'".to_string());
+    }
+    if alias.contains('/') || alias.contains('\\') || alias.contains("..") {
+        return Err("argument to --override-alias must not contain path separators".to_string());
+    }
+    if !alias
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+    {
+        return Err(
+            "argument to --override-alias should start with an alphanumeric character".to_string(),
+        );
+    }
+    if !alias
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '+' || c == '-')
+    {
+        return Err(
+            "argument to --override-alias should consist of alphanumeric characters including symbols '_.+-'"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn map_descriptor(input: RegistryDescriptor) -> OciDescriptor {
+    OciDescriptor {
+        media_type: input.media_type,
+        digest: input.digest,
+        size: input.size,
+        urls: input.urls,
+        annotations: input.annotations,
+        platform: input.platform.map(|platform| OciPlatform {
+            os: platform.os,
+            architecture: platform.architecture,
+            variant: platform.variant,
+            os_version: platform.os_version,
+            os_features: platform.os_features,
+        }),
+    }
+}
+
+async fn fetch_bearer_token(
+    client: &reqwest::Client,
+    challenge: &BearerChallenge,
+) -> Result<String, String> {
+    let mut request = client.get(&challenge.realm);
+    if let Some(service) = challenge.service.as_deref() {
+        request = request.query(&[("service", service)]);
+    }
+    if let Some(scope) = challenge.scope.as_deref() {
+        request = request.query(&[("scope", scope)]);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("fetch OCI auth token: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "fetch OCI auth token failed with HTTP {}",
+            response.status()
+        ));
+    }
+    let body: BearerTokenResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("decode OCI auth token response: {}", e))?;
+    body.token
+        .or(body.access_token)
+        .ok_or_else(|| "OCI auth token response missing token field".to_string())
+}
+
+fn parse_bearer_challenge(header: &str) -> Option<BearerChallenge> {
+    let header = header.trim();
+    let rest = header.strip_prefix("Bearer ")?;
+    let mut realm = None;
+    let mut service = None;
+    let mut scope = None;
+
+    for part in rest.split(',') {
+        let (key, value) = part.trim().split_once('=')?;
+        let value = value.trim().trim_matches('"').to_string();
+        match key.trim() {
+            "realm" => realm = Some(value),
+            "service" => service = Some(value),
+            "scope" => scope = Some(value),
+            _ => {}
+        }
+    }
+
+    Some(BearerChallenge {
+        realm: realm?,
+        service,
+        scope,
+    })
+}
+
+async fn fetch_manifest_json(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<(RegistryManifestResponse, Option<String>, Option<String>), String> {
+    let accept = format!(
+        "{},{},{},{}",
+        OCI_IMAGE_INDEX_MEDIA_TYPE,
+        DOCKER_MANIFEST_LIST_MEDIA_TYPE,
+        OCI_IMAGE_MANIFEST_MEDIA_TYPE,
+        DOCKER_MANIFEST_MEDIA_TYPE
+    );
+    let mut bearer_token: Option<String> = None;
+
+    for _ in 0..2 {
+        let mut request = client.get(url).header(reqwest::header::ACCEPT, &accept);
+        if let Some(token) = bearer_token.as_deref() {
+            request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token));
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("request OCI manifest {}: {}", url, e))?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && bearer_token.is_none() {
+            let challenge_header = response
+                .headers()
+                .get(reqwest::header::WWW_AUTHENTICATE)
+                .and_then(|h| h.to_str().ok())
+                .ok_or_else(|| "OCI registry requires auth but no challenge was provided".to_string())?;
+            let challenge = parse_bearer_challenge(challenge_header)
+                .ok_or_else(|| format!("unsupported WWW-Authenticate challenge: {}", challenge_header))?;
+            bearer_token = Some(fetch_bearer_token(client, &challenge).await?);
+            continue;
+        }
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "request OCI manifest {} failed with HTTP {}",
+                url,
+                response.status()
+            ));
+        }
+
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .map(|v| v.to_string());
+        let body = response
+            .json::<RegistryManifestResponse>()
+            .await
+            .map_err(|e| format!("decode OCI manifest {}: {}", url, e))?;
+        return Ok((body, content_type, bearer_token.clone()));
+    }
+
+    Err(format!("failed to authorize OCI manifest request {}", url))
+}
+
+async fn resolve_oci_manifest(
+    oci_ref: &ResolvedOciReference,
+    architecture: &str,
+) -> Result<ResolvedOciManifest, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("pr-cli-oci/0.1")
+        .build()
+        .map_err(|e| format!("create OCI registry client: {}", e))?;
+
+    let manifest_url = format!(
+        "{}/v2/{}/manifests/{}",
+        oci_ref.registry_base.trim_end_matches('/'),
+        oci_ref.repository.trim_matches('/'),
+        oci_ref.reference
+    );
+    let (top_manifest, top_content_type, top_token) =
+        fetch_manifest_json(&client, &manifest_url).await?;
+
+    let top_media_type = top_manifest
+        .media_type
+        .as_deref()
+        .or(top_content_type.as_deref())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let is_index = top_media_type.contains("manifest.list")
+        || top_media_type.contains("image.index")
+        || !top_manifest.manifests.is_empty();
+
+    let (selected_manifest, selected_token) = if is_index {
+        let descriptors: Vec<OciDescriptor> = top_manifest
+            .manifests
+            .into_iter()
+            .map(map_descriptor)
+            .collect();
+        let selected = select_manifest_descriptor(&descriptors, architecture).ok_or_else(|| {
+            format!(
+                "OCI image '{}' does not provide a supported manifest for architecture '{}'",
+                oci_ref.repository, architecture
+            )
+        })?;
+        let selected_url = format!(
+            "{}/v2/{}/manifests/{}",
+            oci_ref.registry_base.trim_end_matches('/'),
+            oci_ref.repository.trim_matches('/'),
+            selected.digest
+        );
+        let (manifest, _, token) = fetch_manifest_json(&client, &selected_url).await?;
+        (manifest, token.or(top_token))
+    } else {
+        (top_manifest, top_token)
+    };
+
+    let config = selected_manifest
+        .config
+        .ok_or_else(|| "OCI manifest missing config descriptor".to_string())?;
+    if selected_manifest.schema_version != 2 {
+        return Err(format!(
+            "unsupported OCI manifest schema version {}",
+            selected_manifest.schema_version
+        ));
+    }
+
+    Ok(ResolvedOciManifest {
+        manifest: OciManifest {
+            schema_version: selected_manifest.schema_version,
+            media_type: selected_manifest.media_type,
+            config: map_descriptor(config),
+            layers: selected_manifest.layers.into_iter().map(map_descriptor).collect(),
+            annotations: std::collections::BTreeMap::new(),
+        },
+        bearer_token: selected_token,
+    })
+}
+
+fn cleanup_oci_on_failure(container_dir: &Path) {
+    let containers_root = Path::new(&get_oci_containers_dir()).to_path_buf();
+    if container_dir.parent() != Some(containers_root.as_path()) {
+        return;
+    }
+    let Some(leaf_name) = container_dir.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    if validate_alias_format(leaf_name).is_err() {
+        return;
+    }
+
+    let container_dir_str = container_dir.to_string_lossy().into_owned();
+    let busybox = get_native_busybox();
+    let _ = Command::new(&busybox)
+        .arg0("busybox")
+        .args(["rm", "-rf", &container_dir_str])
+        .status();
+}
+
+fn install_from_oci_reference(reference: &str, override_alias: Option<&str>) -> Result<(), String> {
+    let resolved = resolve_oci_reference(reference)?;
+    let install_name = derive_oci_install_name(&resolved, override_alias)?;
+    let container_dir = get_oci_container_dir(&install_name);
+    let rootfs = get_oci_container_rootfs_dir(&install_name);
+    let metadata_path = get_oci_container_manifest_path(&install_name);
+    let container_dir_path = Path::new(&container_dir);
+
+    if resolve_installed_rootfs(&install_name).is_some() {
+        return Err(format!(
+            "distribution '{}' is already installed",
+            install_name
+        ));
+    }
+
+    msg_status(&format!(
+        "Installing OCI image {}:{} as '{}'...",
+        resolved.repository, resolved.reference, install_name
+    ));
+
+    fs::create_dir_all(&rootfs).map_err(|e| format!("create OCI rootfs dir: {}", e))?;
+    let l2s_dir = format!("{}/.l2s", rootfs);
+    fs::create_dir_all(&l2s_dir).map_err(|e| format!("create OCI .l2s dir: {}", e))?;
+
+    let device_arch = detect_device_arch();
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime: {}", e))?;
+    let resolved_manifest = match rt.block_on(resolve_oci_manifest(&resolved, &device_arch)) {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            cleanup_oci_on_failure(container_dir_path);
+            return Err(e);
+        }
+    };
+    let bearer_token = resolved_manifest.bearer_token;
+    let manifest = resolved_manifest.manifest;
+
+    if manifest.layers.is_empty() {
+        cleanup_oci_on_failure(container_dir_path);
+        return Err("OCI manifest does not contain filesystem layers".to_string());
+    }
+
+    let cache_dir = Path::new(&get_download_cache_dir()).to_path_buf();
+    fs::create_dir_all(&cache_dir).map_err(|e| format!("create cache dir: {}", e))?;
+    let rootfs_path = Path::new(&rootfs);
+    for layer in &manifest.layers {
+        let blob = blob_path(&cache_dir, &layer.digest)?;
+        if !blob.exists() {
+            let url = blob_url(&resolved.registry_base, &resolved.repository, &layer.digest);
+            msg_status(&format!("Downloading OCI layer {}...", layer.digest));
+            if let Err(e) = rt.block_on(download_blob_with_bearer(
+                &url,
+                &blob,
+                &layer.digest,
+                bearer_token.as_deref(),
+            )) {
+                cleanup_oci_on_failure(container_dir_path);
+                return Err(e);
+            }
+        }
+        apply_layer_blob(&blob, rootfs_path).map_err(|e| {
+            cleanup_oci_on_failure(container_dir_path);
+            e
+        })?;
+    }
+
+    if !Path::new(&format!("{}/etc", rootfs)).exists() {
+        cleanup_oci_on_failure(container_dir_path);
+        return Err("OCI rootfs has unexpected structure (missing /etc)".to_string());
+    }
+
+    write_config_files(&rootfs, None)?;
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("system clock error while writing OCI metadata: {}", e))?
+        .as_secs();
+    let metadata = OciInstallMetadata::new(
+        install_name.clone(),
+        reference,
+        normalized_oci_reference(&resolved),
+        device_arch,
+        created_at,
+    );
+    if let Err(e) = write_oci_install_metadata(Path::new(&metadata_path), &metadata) {
+        cleanup_oci_on_failure(container_dir_path);
+        return Err(e);
+    }
+    msg_status("Finished.");
+    Ok(())
 }
 
 fn extract_tarball(
@@ -366,7 +931,143 @@ fn setup_fake_sysdata(rootfs: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn write_config_files(rootfs: &str, distro_name: &str) -> Result<(), String> {
+fn append_line_if_missing(path: &Path, line: &str) -> Result<(), String> {
+    let mut content = fs::read_to_string(path).unwrap_or_default();
+    if !content.lines().any(|existing| existing.trim() == line.trim()) {
+        if !content.ends_with('\n') && !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str(line);
+        content.push('\n');
+        fs::write(path, content).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    }
+    Ok(())
+}
+
+fn uncomment_en_us_locale(rootfs: &str) -> Result<(), String> {
+    let locale_gen_path = Path::new(rootfs).join("etc/locale.gen");
+    let content = fs::read_to_string(&locale_gen_path)
+        .map_err(|e| format!("read {}: {}", locale_gen_path.display(), e))?;
+    let updated = content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("#") {
+                let uncommented = trimmed.trim_start_matches('#').trim_start();
+                if uncommented.starts_with("en_US.UTF-8") && uncommented.contains("UTF-8") {
+                    return uncommented.to_string();
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&locale_gen_path, format!("{}\n", updated))
+        .map_err(|e| format!("write {}: {}", locale_gen_path.display(), e))
+}
+
+fn run_guest_shell_command(
+    rootfs: &str,
+    command: &str,
+    envs: &[(&str, &str)],
+) -> Result<(), String> {
+    let cache_dir = std::env::var("PROOT_TMP_DIR")
+        .or_else(|_| std::env::var("TMPDIR"))
+        .unwrap_or_else(|_| format!("{}/tmp", get_prefix()));
+
+    let mut cmd = Command::new(get_native_proot());
+    cmd.env("PROOT_NO_SECCOMP", "1")
+        .env("PROOT_L2S_DIR", format!("{}/.l2s", rootfs))
+        .env("PROOT_TMP_DIR", &cache_dir)
+        .env("TMPDIR", &cache_dir)
+        .env("PROOT_LOADER", get_native_loader())
+        .args([
+            "--link2symlink",
+            "--change-id=0:0",
+            "-r",
+            rootfs,
+            "/bin/sh",
+            "-c",
+            command,
+        ]);
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+
+    let status = cmd
+        .status()
+        .map_err(|e| format!("run guest command '{}': {}", command, e))?;
+    if !status.success() {
+        return Err(format!(
+            "guest command failed with exit code {:?}: {}",
+            status.code(),
+            command
+        ));
+    }
+    Ok(())
+}
+
+fn apply_rust_owned_distro_setup(rootfs: &str, distro_alias: &str) -> Result<(), String> {
+    match distro_alias {
+        "debian" => {
+            uncomment_en_us_locale(rootfs)?;
+            run_guest_shell_command(rootfs, "dpkg-reconfigure locales", &[("DEBIAN_FRONTEND", "noninteractive")])?;
+        }
+        "ubuntu" => {
+            uncomment_en_us_locale(rootfs)?;
+            run_guest_shell_command(rootfs, "dpkg-reconfigure locales", &[("DEBIAN_FRONTEND", "noninteractive")])?;
+            let _ = run_guest_shell_command(rootfs, "add-apt-repository --yes --no-update ppa:mozillateam/ppa", &[]);
+            let pin_path = Path::new(rootfs).join("etc/apt/preferences.d/pin-mozilla-ppa");
+            if let Some(parent) = pin_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("create {}: {}", parent.display(), e))?;
+            }
+            fs::write(
+                &pin_path,
+                "Package: *\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 9999\n",
+            )
+            .map_err(|e| format!("write {}: {}", pin_path.display(), e))?;
+        }
+        "archlinux" => {
+            for file in ["su", "su-l", "system-local-login", "system-remote-login"] {
+                append_line_if_missing(
+                    &Path::new(rootfs).join("etc/pam.d").join(file),
+                    "session  required  pam_env.so readenv=1",
+                )?;
+            }
+            uncomment_en_us_locale(rootfs)?;
+            run_guest_shell_command(rootfs, "locale-gen", &[])?;
+        }
+        "manjaro" => {
+            for file in ["su", "su-l", "system-local-login", "system-remote-login"] {
+                append_line_if_missing(
+                    &Path::new(rootfs).join("etc/pam.d").join(file),
+                    "session  required  pam_env.so readenv=1",
+                )?;
+            }
+        }
+        "fedora" => {
+            run_guest_shell_command(rootfs, "authselect opt-out", &[])?;
+            append_line_if_missing(
+                &Path::new(rootfs).join("etc/pam.d/system-auth"),
+                "session  required  pam_env.so readenv=1",
+            )?;
+        }
+        "opensuse" => {
+            run_guest_shell_command(rootfs, "zypper al filesystem", &[])?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn has_rust_owned_distro_setup(distro_alias: &str) -> bool {
+    matches!(
+        distro_alias,
+        "debian" | "ubuntu" | "archlinux" | "manjaro" | "fedora" | "opensuse"
+    )
+}
+
+fn write_config_files(rootfs: &str, distro_name: Option<&str>) -> Result<(), String> {
     let prefix = get_prefix();
     let default_path_env = format!(
         "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:{}/bin",
@@ -504,42 +1205,17 @@ fn write_config_files(rootfs: &str, distro_name: &str) -> Result<(), String> {
     ));
     setup_fake_sysdata(rootfs)?;
 
-    // distro_setup via proot if plugin has one
-    let plugins_dir = get_plugins_dir();
-    let plugin_path = format!("{}/{}.sh", plugins_dir, distro_name);
-    if let Ok(content) = fs::read_to_string(&plugin_path) {
-        if content.contains("distro_setup()") {
-            msg_status("Running distribution-specific configuration steps...");
-
-            let proot = get_native_proot();
-            let rootfs_dir = rootfs.to_string();
-            let setup_script = format!(
-                "(. /etc/proot-distro/{}.sh 2>/dev/null; cd / && type distro_setup >/dev/null 2>&1 && distro_setup) >/dev/null 2>&1 || true",
-                distro_name
-            );
-
-            let cache_dir = std::env::var("PROOT_TMP_DIR")
-                .or_else(|_| std::env::var("TMPDIR"))
-                .unwrap_or_else(|_| format!("{}/tmp", get_prefix()));
-
-            let _ = Command::new(&proot)
-                .env("PROOT_NO_SECCOMP", "1")
-                .env("PROOT_L2S_DIR", format!("{}/.l2s", rootfs))
-                .env("PROOT_TMP_DIR", &cache_dir)
-                .env("TMPDIR", &cache_dir)
-                .env("PROOT_LOADER", get_native_loader())
-                .args([
-                    "--link2symlink",
-                    "--change-id=0:0",
-                    "-b",
-                    &format!("{}:/etc/proot-distro", plugins_dir),
-                    "-r",
-                    &rootfs_dir,
-                    "/bin/sh",
-                    "-c",
-                    &setup_script,
-                ])
-                .status();
+    // Rust-owned distro-specific setup profile
+    let Some(distro_name) = distro_name else {
+        return Ok(());
+    };
+    if has_rust_owned_distro_setup(distro_name) {
+        msg_status("Running distribution-specific configuration steps...");
+        if let Err(e) = apply_rust_owned_distro_setup(rootfs, distro_name) {
+            msg_error(&format!(
+                "distribution-specific setup for '{}' failed (continuing): {}",
+                distro_name, e
+            ));
         }
     }
 
@@ -567,37 +1243,29 @@ pub fn command_install(
     override_tarball_url: Option<&str>,
     override_tarball_sha256: Option<&str>,
 ) -> Result<(), String> {
+    let requested_distro = distro_name.to_string();
+    if let Some(source) = InstallSourceInput::classify(distro_name) {
+        if source.kind() == InstallSourceInputKind::OciImageReference {
+            if override_tarball_url.is_some() || override_tarball_sha256.is_some() {
+                return Err(
+                    "--override-tarball-url and --override-tarball-sha256 are not supported for OCI image installs"
+                        .to_string(),
+                );
+            }
+            if let Some(alias) = override_alias {
+                validate_alias_format(alias)?;
+            }
+            return install_from_oci_reference(source.source_text().as_ref(), override_alias);
+        }
+    }
+
     let plugins_dir = get_plugins_dir();
     let installed_rootfs_dir = get_installed_rootfs_dir();
     let download_cache_dir = get_download_cache_dir();
 
     // Validate alias format if override-alias given
     let distro_name = if let Some(alias) = override_alias {
-        if alias.is_empty() {
-            return Err("argument to --override-alias should not be empty".to_string());
-        }
-        if alias.ends_with(".sh") {
-            return Err("argument to --override-alias should not end with '.sh'".to_string());
-        }
-        if !alias
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphanumeric())
-        {
-            return Err(
-                "argument to --override-alias should start with an alphanumeric character"
-                    .to_string(),
-            );
-        }
-        if !alias
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '+' || c == '-')
-        {
-            return Err(
-                "argument to --override-alias should consist of alphanumeric characters including symbols '_.+-'"
-                    .to_string(),
-            );
-        }
+        validate_alias_format(alias)?;
 
         let override_path = format!("{}/{}.sh", plugins_dir, alias);
         let override_alt = format!("{}/{}.override.sh", plugins_dir, alias);
@@ -655,7 +1323,7 @@ pub fn command_install(
 
     // Check not already installed
     let rootfs = format!("{}/{}", installed_rootfs_dir, distro_name);
-    if Path::new(&rootfs).is_dir() {
+    if resolve_installed_rootfs(&distro_name).is_some() {
         println!();
         msg_error(&format!(
             "distribution '{}' is already installed.",
@@ -775,7 +1443,7 @@ pub fn command_install(
     }
 
     // Write config files
-    write_config_files(&rootfs, &distro_name)?;
+    write_config_files(&rootfs, Some(&requested_distro))?;
 
     msg_status("Finished.");
     println!();
@@ -786,4 +1454,230 @@ pub fn command_install(
     println!();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
+
+    #[test]
+    fn resolves_short_reference_to_docker_hub_library() {
+        let resolved = resolve_oci_reference("alpine:latest").expect("resolve reference");
+        assert_eq!(resolved.registry_base, "https://registry-1.docker.io");
+        assert_eq!(resolved.repository, "library/alpine");
+        assert_eq!(resolved.reference, "latest");
+    }
+
+    #[test]
+    fn resolves_registry_qualified_reference() {
+        let resolved =
+            resolve_oci_reference("ghcr.io/example/app:1.2.3").expect("resolve reference");
+        assert_eq!(resolved.registry_base, "https://ghcr.io");
+        assert_eq!(resolved.repository, "example/app");
+        assert_eq!(resolved.reference, "1.2.3");
+    }
+
+    #[test]
+    fn resolves_digest_reference() {
+        let resolved = resolve_oci_reference(
+            "docker.io/library/debian@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("resolve digest reference");
+        assert_eq!(resolved.registry_base, "https://registry-1.docker.io");
+        assert_eq!(resolved.repository, "library/debian");
+        assert_eq!(
+            resolved.reference,
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+        assert!(resolved.digest_reference);
+    }
+
+    #[test]
+    fn resolves_explicit_docker_hub_single_repo_to_library_namespace() {
+        let resolved = resolve_oci_reference("docker.io/alpine:latest").expect("resolve reference");
+        assert_eq!(resolved.registry_base, "https://registry-1.docker.io");
+        assert_eq!(resolved.repository, "library/alpine");
+        assert_eq!(resolved.reference, "latest");
+        assert!(!resolved.digest_reference);
+    }
+
+    #[test]
+    fn defaults_install_name_from_repository_leaf() {
+        let resolved = ResolvedOciReference {
+            registry_base: "https://registry-1.docker.io".to_string(),
+            repository: "library/ubuntu".to_string(),
+            reference: "24.04".to_string(),
+            digest_reference: false,
+        };
+        assert_eq!(default_install_name_for_oci(&resolved), "ubuntu");
+    }
+
+    #[test]
+    fn normalizes_oci_reference_with_tag_and_digest() {
+        let tag_ref = ResolvedOciReference {
+            registry_base: "https://registry-1.docker.io".to_string(),
+            repository: "library/debian".to_string(),
+            reference: "stable".to_string(),
+            digest_reference: false,
+        };
+        assert_eq!(
+            normalized_oci_reference(&tag_ref),
+            "registry-1.docker.io/library/debian:stable"
+        );
+
+        let digest_ref = ResolvedOciReference {
+            registry_base: "https://ghcr.io".to_string(),
+            repository: "example/app".to_string(),
+            reference: "sha256:abc".to_string(),
+            digest_reference: true,
+        };
+        assert_eq!(
+            normalized_oci_reference(&digest_ref),
+            "ghcr.io/example/app@sha256:abc"
+        );
+    }
+
+    #[test]
+    fn rejects_alias_with_path_separators_or_traversal() {
+        assert!(validate_alias_format("../escape").is_err());
+        assert!(validate_alias_format("name/with/slash").is_err());
+        assert!(validate_alias_format("name\\with\\slash").is_err());
+    }
+
+    #[test]
+    fn detects_rust_owned_setup_profiles() {
+        assert!(has_rust_owned_distro_setup("debian"));
+        assert!(has_rust_owned_distro_setup("ubuntu"));
+        assert!(!has_rust_owned_distro_setup("alpine"));
+    }
+
+    #[test]
+    fn uncomments_en_us_locale_entry() {
+        let tmp_dir = unique_temp_dir("pr-cli-locale");
+        fs::create_dir_all(tmp_dir.join("etc")).expect("create etc");
+        let locale_gen = tmp_dir.join("etc/locale.gen");
+        fs::write(
+            &locale_gen,
+            "# en_US.UTF-8 UTF-8\n# de_DE.UTF-8 UTF-8\n",
+        )
+        .expect("write locale.gen");
+
+        uncomment_en_us_locale(tmp_dir.to_str().expect("tmp path"))
+            .expect("uncomment locale");
+        let updated = fs::read_to_string(&locale_gen).expect("read locale.gen");
+        assert!(updated.contains("en_US.UTF-8 UTF-8"));
+        assert!(updated.contains("# de_DE.UTF-8 UTF-8"));
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn derives_safe_default_install_name_when_repository_leaf_is_invalid() {
+        let resolved = ResolvedOciReference {
+            registry_base: "https://registry-1.docker.io".to_string(),
+            repository: "library/..".to_string(),
+            reference: "latest".to_string(),
+            digest_reference: false,
+        };
+
+        let name = derive_oci_install_name(&resolved, None).expect("derive install name");
+        assert_eq!(name, "container");
+    }
+
+    #[test]
+    fn parses_bearer_challenge_fields() {
+        let challenge = parse_bearer_challenge(
+            r#"Bearer realm="https://auth.example/token",service="registry.example",scope="repository:library/alpine:pull""#,
+        )
+        .expect("parse challenge");
+        assert_eq!(challenge.realm, "https://auth.example/token");
+        assert_eq!(challenge.service.as_deref(), Some("registry.example"));
+        assert_eq!(
+            challenge.scope.as_deref(),
+            Some("repository:library/alpine:pull")
+        );
+    }
+
+    #[test]
+    fn rejects_non_bearer_challenge() {
+        assert!(parse_bearer_challenge(r#"Basic realm="example""#).is_none());
+    }
+
+    #[test]
+    fn sanitize_install_name_keeps_allowed_chars_and_lowercases() {
+        assert_eq!(sanitize_install_name("My.Image+Test"), "my.image+test");
+        assert_eq!(sanitize_install_name("___"), "___");
+    }
+
+    #[test]
+    fn verify_sha256_matches_file_content() {
+        let tmp_dir = unique_temp_dir("pr-cli-sha256");
+        fs::create_dir_all(&tmp_dir).expect("create temp dir");
+        let file_path = tmp_dir.join("payload.txt");
+        fs::write(&file_path, b"hello coverage").expect("write payload");
+        let digest = format!("{:x}", Sha256::digest(b"hello coverage"));
+
+        verify_sha256(&digest, file_path.to_str().expect("path")).expect("sha matches");
+        assert!(verify_sha256(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            file_path.to_str().expect("path")
+        )
+        .is_err());
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn setup_fake_sysdata_writes_expected_files() {
+        let tmp_dir = unique_temp_dir("pr-cli-fake-sysdata");
+        fs::create_dir_all(&tmp_dir).expect("create temp dir");
+        setup_fake_sysdata(tmp_dir.to_str().expect("path")).expect("setup fake sysdata");
+
+        assert!(tmp_dir.join("proc/.loadavg").is_file());
+        assert!(tmp_dir.join("proc/.stat").is_file());
+        assert!(tmp_dir.join("proc/.uptime").is_file());
+        assert!(tmp_dir.join("proc/.version").is_file());
+        assert!(tmp_dir.join("proc/.vmstat").is_file());
+        assert!(tmp_dir.join("sys/.empty").is_dir());
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn write_config_files_populates_rootfs_basics_without_distro_hook() {
+        let tmp_dir = unique_temp_dir("pr-cli-write-config");
+        let rootfs = tmp_dir.join("rootfs");
+        fs::create_dir_all(rootfs.join("etc")).expect("create etc");
+        fs::write(rootfs.join("etc/environment"), "").expect("seed environment");
+        fs::write(rootfs.join("etc/hosts"), "").expect("seed hosts");
+        fs::write(rootfs.join("etc/passwd"), "").expect("seed passwd");
+        fs::write(rootfs.join("etc/shadow"), "").expect("seed shadow");
+        fs::write(rootfs.join("etc/group"), "").expect("seed group");
+        fs::write(rootfs.join("etc/gshadow"), "").expect("seed gshadow");
+
+        write_config_files(rootfs.to_str().expect("path"), None).expect("write config");
+
+        let resolv = fs::read_to_string(rootfs.join("etc/resolv.conf")).expect("read resolv");
+        assert!(resolv.contains("nameserver 8.8.8.8"));
+        assert!(resolv.contains("nameserver 8.8.4.4"));
+
+        let env = fs::read_to_string(rootfs.join("etc/environment")).expect("read env");
+        assert!(env.contains("LANG=en_US.UTF-8"));
+        assert!(env.contains("MOZ_FAKE_NO_SANDBOX=1"));
+
+        assert!(rootfs.join("proc/.version").is_file());
+        assert!(rootfs.join("sys/.empty").is_dir());
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
 }
