@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::plugin::DistroPlugin;
@@ -129,9 +131,64 @@ impl InstallDescriptor {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OciInstallMetadata {
+    pub install_name: String,
+    pub source_kind: String,
+    pub original_source_reference: String,
+    pub normalized_source_reference: String,
+    pub selected_architecture: String,
+    pub created_at: u64,
+}
+
+impl OciInstallMetadata {
+    pub fn new(
+        install_name: impl Into<String>,
+        original_source_reference: impl Into<String>,
+        normalized_source_reference: impl Into<String>,
+        selected_architecture: impl Into<String>,
+        created_at: u64,
+    ) -> Self {
+        Self {
+            install_name: install_name.into(),
+            source_kind: "oci-image".to_string(),
+            original_source_reference: original_source_reference.into(),
+            normalized_source_reference: normalized_source_reference.into(),
+            selected_architecture: selected_architecture.into(),
+            created_at,
+        }
+    }
+}
+
+pub fn write_oci_install_metadata(
+    metadata_path: &Path,
+    metadata: &OciInstallMetadata,
+) -> Result<(), String> {
+    let Some(parent) = metadata_path.parent() else {
+        return Err(format!(
+            "invalid OCI metadata path {}",
+            metadata_path.display()
+        ));
+    };
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("create OCI metadata dir {}: {}", parent.display(), e))?;
+    let bytes = serde_json::to_vec_pretty(metadata)
+        .map_err(|e| format!("serialize OCI metadata {}: {}", metadata_path.display(), e))?;
+    fs::write(metadata_path, bytes)
+        .map_err(|e| format!("write OCI metadata {}: {}", metadata_path.display(), e))
+}
+
+pub fn load_oci_install_metadata(metadata_path: &Path) -> Result<OciInstallMetadata, String> {
+    let content = fs::read_to_string(metadata_path)
+        .map_err(|e| format!("read OCI metadata {}: {}", metadata_path.display(), e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("parse OCI metadata {}: {}", metadata_path.display(), e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn legacy_plugin_descriptor_exposes_common_fields() {
@@ -190,5 +247,28 @@ mod tests {
                 "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian/manifest.json"
             ))
         );
+    }
+
+    #[test]
+    fn round_trips_oci_metadata_json() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("pr-cli-oci-metadata-{}-{}", std::process::id(), nanos));
+        let metadata_path = base.join("manifest.json");
+        let metadata = OciInstallMetadata::new(
+            "debian",
+            "docker.io/library/debian:stable",
+            "registry-1.docker.io/library/debian:stable",
+            "aarch64",
+            1_717_176_400,
+        );
+
+        write_oci_install_metadata(&metadata_path, &metadata).expect("write metadata");
+        let loaded = load_oci_install_metadata(&metadata_path).expect("load metadata");
+        assert_eq!(loaded, metadata);
+
+        let _ = std::fs::remove_dir_all(base);
     }
 }

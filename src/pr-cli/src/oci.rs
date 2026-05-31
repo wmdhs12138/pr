@@ -285,7 +285,20 @@ pub fn blob_url(registry_base: &str, repository: &str, digest: &str) -> String {
     format!("{}/v2/{}/blobs/{}", base, repo, digest)
 }
 
-pub async fn download_blob(url: &str, destination: &Path, expected_digest: &str) -> Result<(), String> {
+pub async fn download_blob(
+    url: &str,
+    destination: &Path,
+    expected_digest: &str,
+) -> Result<(), String> {
+    download_blob_with_bearer(url, destination, expected_digest, None).await
+}
+
+pub async fn download_blob_with_bearer(
+    url: &str,
+    destination: &Path,
+    expected_digest: &str,
+    bearer_token: Option<&str>,
+) -> Result<(), String> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
@@ -298,8 +311,11 @@ pub async fn download_blob(url: &str, destination: &Path, expected_digest: &str)
         .user_agent("pr-cli-oci/0.1")
         .build()
         .map_err(|e| format!("create reqwest client: {}", e))?;
-    let response = client
-        .get(url)
+    let mut request = client.get(url);
+    if let Some(token) = bearer_token {
+        request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token));
+    }
+    let response = request
         .send()
         .await
         .map_err(|e| format!("download blob {}: {}", url, e))?;

@@ -8,6 +8,12 @@ pub const DEFAULT_SECONDARY_NAMESERVER: &str = "8.8.4.4";
 pub const DEFAULT_PATH_ENV_SUFFIX: &str =
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstalledSourceType {
+    Legacy,
+    Oci,
+}
+
 pub fn get_prefix() -> String {
     std::env::var("APP_PREFIX").unwrap_or_else(|_| "/data/data/id.or.oo.pr/files/usr".to_string())
 }
@@ -54,6 +60,20 @@ pub fn get_oci_container_rootfs_dir(name: &str) -> String {
 
 pub fn get_oci_container_manifest_path(name: &str) -> String {
     get_oci_container_manifest_path_for_prefix(&get_prefix(), name)
+}
+
+pub fn resolve_installed_rootfs(name: &str) -> Option<(String, InstalledSourceType)> {
+    let legacy_rootfs = format!("{}/{}", get_installed_rootfs_dir(), name);
+    if std::path::Path::new(&legacy_rootfs).is_dir() {
+        return Some((legacy_rootfs, InstalledSourceType::Legacy));
+    }
+
+    let oci_rootfs = get_oci_container_rootfs_dir(name);
+    if std::path::Path::new(&oci_rootfs).is_dir() {
+        return Some((oci_rootfs, InstalledSourceType::Oci));
+    }
+
+    None
 }
 
 pub fn get_download_cache_dir() -> String {
@@ -324,6 +344,23 @@ pub fn build_proot_child_env() -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
 
     #[test]
     fn oci_container_paths_follow_expected_layout() {
@@ -346,5 +383,88 @@ mod tests {
             get_oci_container_manifest_path_for_prefix(prefix, name),
             "/data/data/id.or.oo.pr/files/usr/var/lib/proot-distro/containers/debian/manifest.json"
         );
+    }
+
+    #[test]
+    fn resolve_installed_rootfs_prefers_legacy_when_both_exist() {
+        let _guard = env_lock().lock().expect("lock env");
+        let base = unique_temp_dir("pr-cli-shared-rootfs");
+        let prefix = base.join("usr");
+        let legacy = prefix
+            .join("var/lib/proot-distro/installed-rootfs/debian");
+        let oci_rootfs = prefix
+            .join("var/lib/proot-distro/containers/debian/rootfs");
+        fs::create_dir_all(&legacy).expect("create legacy rootfs");
+        fs::create_dir_all(&oci_rootfs).expect("create oci rootfs");
+
+        std::env::set_var("APP_PREFIX", prefix.to_string_lossy().to_string());
+        let resolved = resolve_installed_rootfs("debian").expect("resolve installed rootfs");
+        assert_eq!(resolved.1, InstalledSourceType::Legacy);
+        assert_eq!(resolved.0, legacy.to_string_lossy());
+
+        std::env::remove_var("APP_PREFIX");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn build_proot_runtime_env_prefers_tmpdir_when_set() {
+        let _guard = env_lock().lock().expect("lock env");
+        std::env::set_var("TMPDIR", "/tmp/custom-cache");
+        std::env::set_var("PROOT_L2S_DIR", "/tmp/custom-l2s");
+
+        let env = build_proot_runtime_env();
+        let map: std::collections::BTreeMap<&str, String> = env.into_iter().collect();
+        assert_eq!(
+            map.get("PROOT_TMP_DIR").map(String::as_str),
+            Some("/tmp/custom-cache")
+        );
+        assert_eq!(map.get("TMPDIR").map(String::as_str), Some("/tmp/custom-cache"));
+        assert_eq!(map.get("PROOT_L2S_DIR").map(String::as_str), Some("/tmp/custom-l2s"));
+
+        std::env::remove_var("TMPDIR");
+        std::env::remove_var("PROOT_L2S_DIR");
+    }
+
+    #[test]
+    fn build_proot_child_env_includes_non_empty_android_vars() {
+        let _guard = env_lock().lock().expect("lock env");
+        std::env::set_var("ANDROID_ROOT", "/system");
+        std::env::set_var("EXTERNAL_STORAGE", "/sdcard");
+
+        let env = build_proot_child_env();
+        let map: std::collections::BTreeMap<String, String> = env.into_iter().collect();
+        assert_eq!(map.get("ANDROID_ROOT").map(String::as_str), Some("/system"));
+        assert_eq!(
+            map.get("EXTERNAL_STORAGE").map(String::as_str),
+            Some("/sdcard")
+        );
+        assert_eq!(map.get("LANG").map(String::as_str), Some("en_US.UTF-8"));
+
+        std::env::remove_var("ANDROID_ROOT");
+        std::env::remove_var("EXTERNAL_STORAGE");
+    }
+
+    #[test]
+    fn build_proot_args_includes_custom_bind_and_rootfs_flags() {
+        let _guard = env_lock().lock().expect("lock env");
+        let base = unique_temp_dir("pr-cli-shared-proot-args");
+        let rootfs = base.join("rootfs");
+        fs::create_dir_all(rootfs.join(".l2s")).expect("create .l2s");
+
+        let args = build_proot_args(
+            rootfs.to_str().expect("rootfs path"),
+            true,
+            false,
+            &[String::from("/host:/guest")],
+        );
+
+        assert!(args.contains(&String::from("--bind=/host:/guest")));
+        assert!(args.contains(&format!("--rootfs={}", rootfs.to_string_lossy())));
+        assert!(args.contains(&String::from("--change-id=0:0")));
+        assert!(args.contains(&String::from("--link2symlink")));
+        assert!(args.iter().any(|a| a.starts_with("--kernel-release=")));
+
+        let _ = fs::remove_dir_all(base);
+        std::env::remove_var("PROOT_L2S_DIR");
     }
 }

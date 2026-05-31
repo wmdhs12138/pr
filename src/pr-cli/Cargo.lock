@@ -769,6 +769,8 @@ dependencies = [
  "futures-util",
  "libc",
  "reqwest",
+ "serde",
+ "serde_json",
  "sha2",
  "tar",
  "tokio",
