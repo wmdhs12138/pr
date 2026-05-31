@@ -3,7 +3,6 @@ package id.or.oo.pr
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -14,32 +13,62 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
 data class DistroInfo(
-    val name: String,
+    val alias: String,
     val displayName: String,
+    val installSource: String,
     val isInstalled: Boolean,
 )
+
+private data class DistroCatalogEntry(
+    val alias: String,
+    val displayName: String,
+    val installSource: String,
+)
+
+private val DISTRO_CATALOG = listOf(
+    DistroCatalogEntry("alpine", "Alpine Linux", "docker.io/library/alpine:latest"),
+    DistroCatalogEntry("archlinux", "Arch Linux", "docker.io/library/archlinux:latest"),
+    DistroCatalogEntry("debian", "Debian", "docker.io/library/debian:stable"),
+    DistroCatalogEntry("fedora", "Fedora", "registry.fedoraproject.org/fedora:latest"),
+    DistroCatalogEntry("manjaro", "Manjaro", "docker.io/manjarolinux/base:latest"),
+    DistroCatalogEntry("opensuse", "openSUSE", "registry.opensuse.org/opensuse/tumbleweed:latest"),
+    DistroCatalogEntry("rockylinux", "Rocky Linux", "docker.io/library/rockylinux:latest"),
+    DistroCatalogEntry("ubuntu", "Ubuntu", "docker.io/library/ubuntu:24.04"),
+)
+
+private fun listDirectories(parent: File): List<String> {
+    return parent.listFiles()
+        ?.filter { it.isDirectory }
+        ?.map { it.name }
+        ?: emptyList()
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Edge-to-edge: Compose owns all insets via imePadding() / navigationBarsPadding().
+        // Manifest uses adjustNothing so the window never auto-resizes for the keyboard.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         val app = application as App
         setContent {
             val darkTheme = isSystemInDarkTheme()
@@ -71,24 +100,46 @@ fun DistroListScreen(app: App) {
     val scope = rememberCoroutineScope()
     var distros by remember { mutableStateOf<List<DistroInfo>>(emptyList()) }
     var loadingDistro by remember { mutableStateOf<String?>(null) }
-    var outputLines by remember { mutableStateOf(mutableListOf<String>()) }
+    var outputLines by remember { mutableStateOf(listOf<String>()) }
     var showOutput by remember { mutableStateOf(false) }
+    var operationLabel by remember { mutableStateOf("") }
+    var operationDistroName by remember { mutableStateOf("") }
+    var customImageRef by remember { mutableStateOf("") }
+    var customAlias by remember { mutableStateOf("") }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     fun refreshDistros() {
-        val pluginsDir = File(app.prefixDir, "etc/proot-distro")
-        val rootfsDir = File(app.prefixDir, "var/lib/proot-distro/installed-rootfs")
-
-        val plugins = pluginsDir.listFiles { f -> f.name.endsWith(".sh") }
-            ?.map { f ->
-                val distroName = f.nameWithoutExtension
-                val displayName = parsePluginName(f) ?: distroName.replaceFirstChar { it.uppercase() }
-                val isInstalled = File(rootfsDir, distroName).exists()
-                DistroInfo(distroName, displayName, isInstalled)
+        val legacyRootfsDir = File(app.prefixDir, "var/lib/proot-distro/installed-rootfs")
+        val ociContainersDir = File(app.prefixDir, "var/lib/proot-distro/containers")
+        val installedAliases = mutableSetOf<String>()
+        installedAliases.addAll(listDirectories(legacyRootfsDir))
+        for (alias in listDirectories(ociContainersDir)) {
+            if (File(ociContainersDir, "$alias/rootfs").isDirectory) {
+                installedAliases.add(alias)
             }
-            ?.sortedBy { it.displayName }
-            ?: emptyList()
+        }
 
-        distros = plugins
+        val catalogDistros = DISTRO_CATALOG.map { entry ->
+            DistroInfo(
+                alias = entry.alias,
+                displayName = entry.displayName,
+                installSource = entry.installSource,
+                isInstalled = installedAliases.contains(entry.alias)
+            )
+        }
+        val catalogAliases = DISTRO_CATALOG.map { it.alias }.toSet()
+        val runtimeOnlyDistros = installedAliases
+            .filter { !catalogAliases.contains(it) }
+            .map { alias ->
+                DistroInfo(
+                    alias = alias,
+                    displayName = alias,
+                    installSource = alias,
+                    isInstalled = true
+                )
+            }
+
+        distros = (catalogDistros + runtimeOnlyDistros).sortedBy { it.displayName.lowercase() }
     }
 
     LaunchedEffect(Unit) { refreshDistros() }
@@ -97,132 +148,215 @@ fun DistroListScreen(app: App) {
         topBar = {
             TopAppBar(
                 title = { Text("PR") },
-                actions = {
-                    if (showOutput) {
-                        IconButton(onClick = {
-                            showOutput = false
-                            outputLines = mutableListOf()
-                        }) {
-                            Icon(Icons.Default.Close, "Close")
-                        }
-                    }
-                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                 )
             )
         }
     ) { padding ->
-        if (showOutput) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (loadingDistro != null) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
+        // Distro list — always visible behind the sheet
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            item {
+                CustomImageInstallCard(
+                    imageRef = customImageRef,
+                    alias = customAlias,
+                    isLoading = loadingDistro != null,
+                    onImageRefChange = { customImageRef = it },
+                    onAliasChange = { customAlias = it },
+                    onInstall = {
+                        if (loadingDistro != null) return@CustomImageInstallCard
+                        val source = customImageRef.trim()
+                        if (source.isEmpty()) return@CustomImageInstallCard
+                        val alias = customAlias.trim()
+                        val command = if (alias.isEmpty()) {
+                            "install $source"
+                        } else {
+                            "install $source --override-alias $alias"
                         }
-                        Text("Output", style = MaterialTheme.typography.titleMedium)
+                        loadingDistro = "__custom__"
+                        operationLabel = "Installing"
+                        operationDistroName = source
+                        showOutput = true
+                        outputLines = listOf("Installing $source…")
+                        scope.launch {
+                            runDistroCommand(app, command) { line ->
+                                outputLines = outputLines + line
+                            }
+                            loadingDistro = null
+                        }
                     }
-                    TextButton(onClick = {
-                        showOutput = false
-                        outputLines = mutableListOf()
-                        refreshDistros()
-                    }) {
-                        Text("Close")
-                    }
-                }
-                val scrollState = rememberScrollState()
-                LaunchedEffect(outputLines.size) {
-                    scrollState.animateScrollTo(Int.MAX_VALUE)
-                }
-                SelectionContainer {
-                    Text(
-                        text = outputLines.joinToString("\n"),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(8.dp)
-                            .verticalScroll(scrollState),
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
+                )
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
+            items(distros) { distro ->
+                DistroCard(
+                    distro = distro,
+                    isLoading = loadingDistro == distro.alias,
+                    onInstall = {
+                        if (loadingDistro == null) {
+                            loadingDistro = distro.alias
+                            operationLabel = "Installing"
+                            operationDistroName = distro.displayName
+                            showOutput = true
+                            outputLines = listOf("Installing ${distro.displayName}…")
+                            scope.launch {
+                                runDistroCommand(
+                                    app,
+                                    "install ${distro.installSource} --override-alias ${distro.alias}"
+                                ) { line ->
+                                    outputLines = outputLines + line
+                                }
+                                loadingDistro = null
+                            }
+                        }
+                    },
+                    onLogin = {
+                        if (loadingDistro == null) {
+                            val intent = Intent(context, TerminalActivity::class.java)
+                            intent.putExtra("distro", distro.alias)
+                            context.startActivity(intent)
+                        }
+                    },
+                    onRemove = {
+                        if (loadingDistro == null) {
+                            loadingDistro = distro.alias
+                            operationLabel = "Removing"
+                            operationDistroName = distro.displayName
+                            showOutput = true
+                            outputLines = listOf("Removing ${distro.displayName}…")
+                            scope.launch {
+                                runDistroCommand(app, "remove ${distro.alias}") { line ->
+                                    outputLines = outputLines + line
+                                }
+                                loadingDistro = null
+                            }
+                        }
+                    },
+                    onTest = {
+                        if (loadingDistro == null) {
+                            loadingDistro = distro.alias
+                            operationLabel = "Testing"
+                            operationDistroName = distro.displayName
+                            showOutput = true
+                            outputLines = listOf("Testing ${distro.displayName}…")
+                            scope.launch {
+                                runDistroCommand(app, "test ${distro.alias}") { line ->
+                                    outputLines = outputLines + line
+                                }
+                                loadingDistro = null
+                            }
+                        }
+                    },
+                )
+            }
+        }
+
+        // Output console as a bottom sheet overlay.
+        // ModalBottomSheet renders as a popup window so it sits above the list
+        // and handles IME insets automatically — text never hides behind the keyboard.
+        if (showOutput) {
+            ModalBottomSheet(
+                onDismissRequest = {
+                    // Prevent swipe-dismiss while an operation is still running
+                    if (loadingDistro == null) {
+                        showOutput = false
+                        outputLines = emptyList()
+                        refreshDistros()
+                    }
+                },
+                sheetState = sheetState,
             ) {
-                items(distros) { distro ->
-                    DistroRow(
-                        distro = distro,
-                        isLoading = loadingDistro == distro.name,
-                        onInstall = {
-                            if (loadingDistro == null) {
-                                loadingDistro = distro.name
-                                showOutput = true
-                                outputLines = mutableListOf("Installing ${distro.displayName}...")
-                                scope.launch {
-                                    runDistroCommand(app, "install ${distro.name}") { line ->
-                                        outputLines = (outputLines + line).toMutableList()
-                                    }
-                                    loadingDistro = null
-                                }
-                            }
-                        },
-                        onLogin = {
-                            if (loadingDistro == null) {
-                                val intent = Intent(context, TerminalActivity::class.java)
-                                intent.putExtra("distro", distro.name)
-                                context.startActivity(intent)
-                            }
-                        },
-                        onRemove = {
-                            if (loadingDistro == null) {
-                                loadingDistro = distro.name
-                                showOutput = true
-                                outputLines = mutableListOf("Removing ${distro.displayName}...")
-                                scope.launch {
-                                    runDistroCommand(app, "remove ${distro.name}") { line ->
-                                        outputLines = (outputLines + line).toMutableList()
-                                    }
-                                    loadingDistro = null
-                                }
-                            }
-                        },
-                        onTest = {
-                            if (loadingDistro == null) {
-                                loadingDistro = distro.name
-                                showOutput = true
-                                outputLines = mutableListOf("Testing ${distro.displayName}...")
-                                scope.launch {
-                                    runDistroCommand(app, "test ${distro.name}") { line ->
-                                        outputLines = (outputLines + line).toMutableList()
-                                    }
-                                    loadingDistro = null
-                                }
-                            }
-                        },
-                    )
-                }
+                OutputConsoleContent(
+                    operationLabel = operationLabel,
+                    distroName = operationDistroName,
+                    isRunning = loadingDistro != null,
+                    outputLines = outputLines,
+                    onClose = {
+                        showOutput = false
+                        outputLines = emptyList()
+                        refreshDistros()
+                    }
+                )
             }
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// Custom OCI install card
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DistroRow(
+fun CustomImageInstallCard(
+    imageRef: String,
+    alias: String,
+    isLoading: Boolean,
+    onImageRefChange: (String) -> Unit,
+    onAliasChange: (String) -> Unit,
+    onInstall: () -> Unit,
+) {
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            Text(
+                text = "Custom OCI image",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = imageRef,
+                onValueChange = onImageRefChange,
+                label = { Text("Image reference") },
+                placeholder = { Text("docker.io/library/debian:stable") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = alias,
+                onValueChange = onAliasChange,
+                label = { Text("Alias (optional)") },
+                placeholder = { Text("debian-custom") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = onInstall,
+                enabled = !isLoading && imageRef.trim().isNotEmpty(),
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Icon(
+                    Icons.Default.Download,
+                    contentDescription = null,
+                    modifier = Modifier.size(ButtonDefaults.IconSize)
+                )
+                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                Text("Install")
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Distro card
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DistroCard(
     distro: DistroInfo,
     isLoading: Boolean,
     onInstall: () -> Unit,
@@ -230,26 +364,31 @@ fun DistroRow(
     onRemove: () -> Unit,
     onTest: () -> Unit,
 ) {
-    Card(
+    var showMenu by remember { mutableStateOf(false) }
+
+    ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Name + status
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = distro.displayName,
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    text = if (distro.isInstalled) "Installed" else "Not installed",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = if (distro.isInstalled) "● Installed" else "○ Not installed",
+                    style = MaterialTheme.typography.labelSmall,
                     color = if (distro.isInstalled)
                         MaterialTheme.colorScheme.primary
                     else
@@ -257,59 +396,172 @@ fun DistroRow(
                 )
             }
 
+            // Actions
             if (isLoading) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(24.dp),
                     strokeWidth = 2.dp
                 )
-            } else {
-                Row {
-                    if (distro.isInstalled) {
-                        IconButton(onClick = onLogin) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Login")
+            } else if (distro.isInstalled) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Primary action: login
+                    FilledIconButton(onClick = onLogin) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Login")
+                    }
+                    // Secondary actions: test + remove in overflow menu
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More options")
                         }
-                        IconButton(onClick = onTest) {
-                            Icon(
-                                Icons.Default.BugReport,
-                                contentDescription = "Test",
-                                tint = MaterialTheme.colorScheme.tertiary
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Test") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.BugReport, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onTest()
+                                }
                             )
-                        }
-                        IconButton(onClick = onRemove) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Remove",
-                                tint = MaterialTheme.colorScheme.error
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Remove",
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onRemove()
+                                }
                             )
-                        }
-                    } else {
-                        IconButton(onClick = onInstall) {
-                            Icon(Icons.Default.Download, contentDescription = "Install")
                         }
                     }
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onInstall,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = null,
+                        modifier = Modifier.size(ButtonDefaults.IconSize)
+                    )
+                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                    Text("Install")
                 }
             }
         }
     }
 }
 
-private fun parsePluginName(pluginFile: File): String? {
-    try {
-        val lines = pluginFile.readLines()
-        for (line in lines) {
-            val trimmed = line.trim()
-            if (trimmed.startsWith("DISTRO_NAME=")) {
-                return trimmed.substringAfter("DISTRO_NAME=").trim('"', '\'')
+// ---------------------------------------------------------------------------
+// Output console (rendered inside ModalBottomSheet)
+// ---------------------------------------------------------------------------
+
+@Composable
+fun OutputConsoleContent(
+    operationLabel: String,
+    distroName: String,
+    isRunning: Boolean,
+    outputLines: List<String>,
+    onClose: () -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    // Auto-scroll to latest output as new lines arrive
+    LaunchedEffect(outputLines.size) {
+        scrollState.animateScrollTo(Int.MAX_VALUE)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .navigationBarsPadding()
+    ) {
+        // Header: operation label + progress
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isRunning) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "$operationLabel: $distroName",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium
+                )
+                if (!isRunning) {
+                    Text(
+                        "Completed",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         }
-    } catch (_: Exception) {}
-    return null
+
+        // Scrollable output area with monospace text
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 200.dp, max = 400.dp),
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 1.dp,
+        ) {
+            SelectionContainer(
+                modifier = Modifier
+                    .verticalScroll(scrollState)
+                    .padding(12.dp)
+            ) {
+                Text(
+                    text = outputLines.joinToString("\n"),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Close button — disabled while the operation is still running
+        Button(
+            onClick = onClose,
+            enabled = !isRunning,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (isRunning) "Running…" else "Close")
+        }
+
+        Spacer(Modifier.height(8.dp))
+    }
 }
 
 private suspend fun runDistroCommand(
     app: App,
     command: String,
-    overrideCmd: Array<String>? = null,
     onLine: (String) -> Unit
 ) = withContext(Dispatchers.IO) {
     val binDir = File(app.prefixDir, "bin")
@@ -326,10 +578,8 @@ private suspend fun runDistroCommand(
         "TMPDIR" to app.cacheDir.absolutePath,
     )
 
-    val cmd = overrideCmd ?: run {
-        val prCli = File(binDir, "pr-cli").absolutePath
-        arrayOf(prCli, *command.split(" ").toTypedArray())
-    }
+    val prCli = File(binDir, "pr-cli").absolutePath
+    val cmd = arrayOf(prCli, *command.split(" ").toTypedArray())
 
     android.util.Log.d("PR", "Running: ${cmd.joinToString(" ")}")
     val pb = ProcessBuilder(*cmd)
