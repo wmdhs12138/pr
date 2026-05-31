@@ -4,14 +4,14 @@ Android app that runs Linux distributions via [proot](https://github.com/proot-m
 
 ## What it does
 
-- Install and run Linux distributions (Alpine, Debian, Ubuntu, and 11 more) on any Android device
+- Install and run Linux distributions (Alpine, Debian, Ubuntu, and 5 more) on any Android device
 - Full package manager support: `apk`, `apt-get`
 - Compile and run C, Rust, and other programs inside the guest
 - targetSdk 35 — Play Store compatible
 
 ## Supported distributions
 
-Alpine, Debian, Ubuntu, Arch Linux, Fedora, OpenSUSE, Manjaro, AlmaLinux, Rocky Linux, Trisquel, Adelie, Artix, Chimera, Deepin
+Alpine, Debian, Ubuntu, Arch Linux, Fedora, OpenSUSE, Manjaro, Rocky Linux
 
 ## How it works
 

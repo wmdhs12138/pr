@@ -11,12 +11,12 @@ fn parse_fixture(name: &str) -> pr_cli::plugin::DistroPlugin {
 }
 
 #[test]
-fn test_load_all_14_plugins() {
+fn test_load_all_8_plugins() {
     let plugins = pr_cli::plugin::load_plugins(&fixtures_dir());
     assert_eq!(
         plugins.len(),
-        14,
-        "expected 14 plugins, got {}",
+        8,
+        "expected 8 plugins, got {}",
         plugins.len()
     );
 
@@ -54,18 +54,6 @@ fn test_alpine() {
 }
 
 #[test]
-fn test_almalinux() {
-    let p = parse_fixture("almalinux");
-    assert_eq!(p.alias, "almalinux");
-    assert_eq!(p.name, "AlmaLinux");
-    assert_eq!(p.comment.as_deref(), Some("Version 10."));
-    assert!(!p.has_setup);
-    assert_eq!(p.tarballs.len(), 2);
-    assert!(p.tarballs.contains_key("aarch64"));
-    assert!(p.tarballs.contains_key("x86_64"));
-}
-
-#[test]
 fn test_archlinux() {
     let p = parse_fixture("archlinux");
     assert_eq!(p.alias, "archlinux");
@@ -76,43 +64,6 @@ fn test_archlinux() {
     assert!(p.tarballs.contains_key("aarch64"));
     assert!(p.tarballs.contains_key("arm"));
     assert!(p.tarballs.contains_key("i686"));
-    assert!(p.tarballs.contains_key("x86_64"));
-}
-
-#[test]
-fn test_artix() {
-    let p = parse_fixture("artix");
-    assert_eq!(p.alias, "artix");
-    assert_eq!(p.name, "Artix Linux");
-    assert!(p.comment.is_none());
-    assert!(p.has_setup);
-    assert_eq!(p.tarballs.len(), 1);
-    assert!(p.tarballs.contains_key("aarch64"));
-}
-
-#[test]
-fn test_adelie() {
-    let p = parse_fixture("adelie");
-    assert_eq!(p.alias, "adelie");
-    assert_eq!(p.name, "Adélie Linux");
-    assert!(p.comment.is_some());
-    assert!(!p.has_setup);
-    assert_eq!(p.tarballs.len(), 3);
-    assert!(p.tarballs.contains_key("aarch64"));
-    assert!(p.tarballs.contains_key("arm"));
-    assert!(p.tarballs.contains_key("x86_64"));
-}
-
-#[test]
-fn test_chimera() {
-    let p = parse_fixture("chimera");
-    assert_eq!(p.alias, "chimera");
-    assert_eq!(p.name, "Chimera Linux");
-    assert!(p.comment.is_some());
-    assert!(!p.has_setup);
-    assert_eq!(p.tarballs.len(), 3);
-    assert!(p.tarballs.contains_key("aarch64"));
-    assert!(p.tarballs.contains_key("riscv64"));
     assert!(p.tarballs.contains_key("x86_64"));
 }
 
@@ -129,18 +80,6 @@ fn test_debian() {
     assert!(p.tarballs.contains_key("i686"));
     assert!(p.tarballs.contains_key("x86_64"));
     assert!(p.tarballs["aarch64"].url.contains("debian-trixie-aarch64"));
-}
-
-#[test]
-fn test_deepin() {
-    let p = parse_fixture("deepin");
-    assert_eq!(p.alias, "deepin");
-    assert_eq!(p.name, "Deepin");
-    assert!(p.comment.is_none());
-    assert!(!p.has_setup);
-    assert_eq!(p.tarballs.len(), 2);
-    assert!(p.tarballs.contains_key("aarch64"));
-    assert!(p.tarballs.contains_key("x86_64"));
 }
 
 #[test]
@@ -187,20 +126,6 @@ fn test_rockylinux() {
     assert!(!p.has_setup);
     assert_eq!(p.tarballs.len(), 2);
     assert!(p.tarballs.contains_key("aarch64"));
-    assert!(p.tarballs.contains_key("x86_64"));
-}
-
-#[test]
-fn test_trisquel() {
-    let p = parse_fixture("trisquel");
-    assert_eq!(p.alias, "trisquel");
-    assert_eq!(p.name, "Trisquel GNU/Linux");
-    assert!(p.comment.is_some());
-    assert!(p.has_setup);
-    assert_eq!(p.tarballs.len(), 4);
-    assert!(p.tarballs.contains_key("aarch64"));
-    assert!(p.tarballs.contains_key("arm"));
-    assert!(p.tarballs.contains_key("i686"));
     assert!(p.tarballs.contains_key("x86_64"));
 }
 
@@ -270,22 +195,13 @@ fn test_all_tarballs_have_valid_url() {
 fn test_has_setup_distribution() {
     let with_setup = [
         "archlinux",
-        "artix",
         "debian",
         "fedora",
         "manjaro",
         "opensuse",
-        "trisquel",
         "ubuntu",
     ];
-    let without_setup = [
-        "adelie",
-        "almalinux",
-        "alpine",
-        "chimera",
-        "deepin",
-        "rockylinux",
-    ];
+    let without_setup = ["alpine", "rockylinux"];
 
     for name in &with_setup {
         let p = parse_fixture(name);
