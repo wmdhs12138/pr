@@ -46,14 +46,14 @@ private data class DistroCatalogEntry(
 )
 
 private val DISTRO_CATALOG = listOf(
-    DistroCatalogEntry("alpine", "Alpine Linux", "docker.io/library/alpine:latest"),
+    DistroCatalogEntry("alpine", "alpine:3.20", "docker.io/library/alpine:3.20"),
     DistroCatalogEntry("archlinux", "Arch Linux", "docker.io/library/archlinux:latest"),
     DistroCatalogEntry("debian", "Debian", "docker.io/library/debian:stable"),
     DistroCatalogEntry("fedora", "Fedora", "registry.fedoraproject.org/fedora:latest"),
     DistroCatalogEntry("manjaro", "Manjaro", "docker.io/manjarolinux/base:latest"),
     DistroCatalogEntry("opensuse", "openSUSE", "registry.opensuse.org/opensuse/tumbleweed:latest"),
     DistroCatalogEntry("rockylinux", "Rocky Linux", "docker.io/library/rockylinux:latest"),
-    DistroCatalogEntry("ubuntu", "Ubuntu", "docker.io/library/ubuntu:24.04"),
+    DistroCatalogEntry("ubuntu", "ubuntu:24.04", "docker.io/library/ubuntu:24.04"),
 )
 
 private fun listDirectories(parent: File): List<String> {
