@@ -17,11 +17,11 @@
 
 ## 3. Android app migration
 
-- [ ] 3.1 Remove the plugin-scanned distro catalog as the Android UI source of truth
-- [ ] 3.2 Add curated OCI presets for Alpine, Debian, Ubuntu, and other supported defaults
-- [ ] 3.3 Add custom image reference input in the Android UI
-- [ ] 3.4 Drive installed status and management actions from runtime install state instead of bundled assets
-- [ ] 3.5 Stop packaging `libbash.so` once app/runtime code no longer requires a bundled host Bash binary
+- [x] 3.1 Remove the plugin-scanned distro catalog as the Android UI source of truth
+- [x] 3.2 Add curated OCI presets for Alpine, Debian, Ubuntu, and other supported defaults
+- [x] 3.3 Add custom image reference input in the Android UI
+- [x] 3.4 Drive installed status and management actions from runtime install state instead of bundled assets
+- [x] 3.5 Stop packaging `libbash.so` once app/runtime code no longer requires a bundled host Bash binary
 
 ## 4. Compatibility and rollout
 
