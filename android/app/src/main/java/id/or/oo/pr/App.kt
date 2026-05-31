@@ -80,13 +80,12 @@ class App : Application() {
         binDir.mkdirs()
 
         val links = mapOf(
-            "bash" to "libbash.so",
             "busybox" to "libbusybox.so",
             "proot" to "libproot.so",
             "pr-cli" to "libpr-cli.so",
         )
 
-        val staleNames = listOf("pr-test", "proot-distro")
+        val staleNames = listOf("bash", "pr-test", "proot-distro")
         for (name in staleNames) {
             val f = File(binDir, name)
             if (f.exists() || java.nio.file.Files.isSymbolicLink(f.toPath())) {

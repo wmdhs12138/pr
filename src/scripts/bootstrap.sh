@@ -2,7 +2,7 @@
 # bootstrap.sh — First-run setup for standalone proot-distro on Android
 #
 # This script MUST be POSIX sh compatible (#!/system/bin/sh).
-# It runs BEFORE bash is available, so no bash-isms allowed.
+# Keep this script POSIX-compatible; avoid bash-isms.
 #
 # Called by APK BootstrapService on first launch:
 #   /system/bin sh /data/data/id.or.oo.pr/files/usr/bin/bootstrap.sh
@@ -82,16 +82,6 @@ install_busybox() {
     log "busybox: ${count} entries in ${BIN_DIR}"
 }
 
-install_bash() {
-    log "Installing bash..."
-    local bash_src="${BIN_DIR}/bash"
-    if [ ! -e "$bash_src" ]; then
-        die "bash not found"
-    fi
-    [ -f "$bash_src" ] && chmod 755 "$bash_src" 2>/dev/null || true
-    log "bash installed"
-}
-
 install_proot() {
     log "Installing proot..."
     local proot_src="${BIN_DIR}/proot"
@@ -159,7 +149,6 @@ print_summary() {
     echo ""
     echo "  proot:       $([ -x "${BIN_DIR}/proot" ] && echo "OK" || echo "MISSING")"
     echo "  busybox:     $([ -x "${BIN_DIR}/busybox" ] && echo "OK" || echo "MISSING")"
-    echo "  bash:        $([ -x "${BIN_DIR}/bash" ] && echo "OK" || echo "MISSING")"
     echo "  proot-distro:$([ -x "${BIN_DIR}/proot-distro" ] && echo "OK" || echo "MISSING")"
     echo ""
     echo "To test:"
@@ -178,7 +167,6 @@ main() {
     check_already_bootstrapped
     create_directories
     install_busybox
-    install_bash
     install_proot
     install_proot_distro
     install_plugins
