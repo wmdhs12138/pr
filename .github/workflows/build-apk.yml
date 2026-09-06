@@ -16,15 +16,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # pr 的 .gitmodules 里部分公开仓库使用 git@github.com:...
-      # GitHub Actions 没配 SSH key 时会失败，所以强制改走 HTTPS。
-      - name: Prepare Git submodules
+      - name: Prepare ConnectBot termlib
         run: |
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          git submodule sync --recursive
+          rm -rf vendor/termlib
 
-          # 第一次测试只需要 Android terminal 的 ConnectBot termlib。
-          git submodule update --init vendor/termlib
+          git clone https://github.com/connectbot/termlib.git vendor/termlib
+
+          git -C vendor/termlib checkout \
+            735c6dc646a845099f34083a15bd295be145a6ce
+
+          echo "termlib commit:"
+          git -C vendor/termlib rev-parse HEAD
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
