@@ -28,6 +28,24 @@ jobs:
           echo "termlib commit:"
           git -C vendor/termlib rev-parse HEAD
 
+          # Fix upstream FocusRequester crash.
+          # imeFocusRequester is never attached to the hidden AndroidView;
+          # focusRequester is.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("vendor/termlib/lib/src/main/java/org/connectbot/terminal/Terminal.kt")
+          s = p.read_text()
+
+          old = "imeFocusRequester.requestFocus()"
+          new = "focusRequester.requestFocus()"
+
+          assert old in s, "FocusRequester target not found"
+          p.write_text(s.replace(old, new, 1))
+
+          print("Patched termlib FocusRequester crash")
+          PY
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
