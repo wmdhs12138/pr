@@ -1,0 +1,65 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/build-apk.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pr 的 .gitmodules 里部分公开仓库使用 git@github.com:...
+      # GitHub Actions 没配 SSH key 时会失败，所以强制改走 HTTPS。
+      - name: Prepare Git submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule sync --recursive
+
+          # 第一次测试只需要 Android terminal 的 ConnectBot termlib。
+          git submodule update --init vendor/termlib
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build components
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "cmake;3.22.1"
+
+      - name: Make Gradle executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Show APK
+        run: |
+          find android/app/build/outputs/apk -type f -name "*.apk" -print
+          ls -lh android/app/build/outputs/apk/debug/ || true
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
