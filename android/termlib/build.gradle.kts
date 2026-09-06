@@ -30,6 +30,10 @@ android {
         file("../../vendor/termlib/lib/src/main/java")
     )
 
+    sourceSets["main"].res.srcDirs(
+        file("../../vendor/termlib/lib/src/main/res")
+    )
+
     externalNativeBuild {
         cmake {
             path = file("../../vendor/termlib/lib/src/main/cpp/CMakeLists.txt")
